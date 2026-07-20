@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How Cloudflare Workers Handle Millions of Signaling Requests | 4share</title>
+<meta name="description" content="Cloudflare Workers realtime explained: how serverless edge computing powers WebRTC signaling for millions of P2P file transfers with sub-50ms latency.">
+<link rel="stylesheet" href="/blog/style.css">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Article", "headline": "How Cloudflare Workers Handle Millions of Signaling Requests", "author": {"@type": "Organization", "name": "4share"}, "datePublished": "2026-01-20", "dateModified": "2026-01-20", "description": "Cloudflare Workers realtime explained: how serverless edge computing powers WebRTC signaling for millions of P2P file transfers with sub-50ms latency."}
+</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What are Cloudflare Workers?", "acceptedAnswer": {"@type": "Answer", "text": "Cloudflare Workers are serverless JavaScript functions that run on Cloudflare's global edge network of over 300 data centers. They execute at the edge, close to the user, with cold start times under 5 milliseconds."}}, {"@type": "Question", "name": "Why use Cloudflare Workers for WebRTC signaling?", "acceptedAnswer": {"@type": "Answer", "text": "WebRTC signaling requires low-latency message exchange between peers. Cloudflare Workers run at the edge, reducing round-trip time. Durable Objects provide sticky state for matching peers, and WebSocket support enables real-time signaling."}}, {"@type": "Question", "name": "What are Durable Objects?", "acceptedAnswer": {"@type": "Answer", "text": "Durable Objects are a Cloudflare Workers feature that provides strongly consistent, single-instance state for coordinating between connections. Each signaling room is backed by a Durable Object that ensures messages are delivered in order and peers are matched correctly."}}, {"type": "Question", "name": "How fast is signaling through Cloudflare Workers?", "acceptedAnswer": {"@type": "Answer", "text": "Signaling through Cloudflare Workers typically completes in under 50 milliseconds. Because Workers run at the edge, the WebSocket connection is established to the nearest data center, minimizing latency."}}, {"@type": "Question", "name": "Can Cloudflare Workers scale to millions of users?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Cloudflare Workers auto-scale to handle any traffic level. Each request runs in an isolated V8 isolate with no cold start penalty. The infrastructure scales horizontally across 300+ data centers worldwide."}}, {"@type": "Question", "name": "What is the cost of running signaling on Cloudflare Workers?", "acceptedAnswer": {"@type": "Answer", "text": "Cloudflare Workers have a generous free tier of 10 million requests per month. Paid plans start at $5/month. For signaling, which involves tiny JSON messages, costs are minimal even at high volume."}}, {"@type": "Question", "name": "How does WebSocket support work in Cloudflare Workers?", "acceptedAnswer": {"@type": "Answer", "text": "Cloudflare Workers support WebSocket connections via the WebSocket API. When a client connects, the Worker can accept the WebSocket, upgrade the HTTP connection, and exchange messages in real time. Durable Objects can hold WebSocket connections for coordination."}}, {"@type": "Question", "name": "Is Cloudflare Workers better than a traditional Node.js server for signaling?", "acceptedAnswer": {"@type": "Answer", "text": "For signaling, Cloudflare Workers offer significant advantages: edge execution reduces latency, auto-scaling eliminates capacity planning, Durable Objects simplify state management, and the pay-per-request pricing is cost-effective for signaling workloads."}}]}
+</script>
+</head>
+<body>
+<header class="site-header"><div class="container"><a href="/" class="logo"><span>4</span>share</a><nav><a href="/blog/">Blog</a><a href="/tutorial/">Tutorial</a><a href="/transfer/large-files/">Send Large Files</a><a href="/about/">About</a></nav></div></header>
+<main class="container">
+<article>
+<div class="breadcrumb"><a href="/blog/">Blog</a> &gt; <a href="/blog/category/deep-dives/">Deep Dives</a></div>
+<h1>How Cloudflare Workers Handle Millions of Signaling Requests</h1>
+<div class="meta"><span>Published: Jan 2026</span><span>Category: Deep Dives</span><span>10 min read</span></div>
+<div class="toc"><h3>Table of Contents</h3><ol>
+<li><a href="#signaling-role">Why Signaling Servers Matter for P2P Transfer</a></li>
+<li><a href="#architecture">The Cloudflare Workers Architecture for Signaling</a></li>
+<li><a href="#durable-objects">Durable Objects: Stateful Coordination at the Edge</a></li>
+<li><a href="#websocket">WebSocket Signaling in Workers</a></li>
+<li><a href="#edge-execution">Edge Execution: Why Latency Matters</a></li>
+<li><a href="#scaling">Scaling to Millions of Concurrent Transfers</a></li>
+<li><a href="#security">Security: Isolating Signaling from File Data</a></li>
+<li><a href="#cost">Cost Analysis: Running Signaling at Scale</a></li>
+<li><a href="#vs-traditional">Cloudflare Workers vs. Traditional Signaling Servers</a></li>
+<li><a href="#architecture-deep">Deep Dive: The Signaling Protocol Flow</a></li>
+</ol></div>
+
+<p>Cloudflare Workers handle millions of signaling requests for WebRTC-based P2P file transfer by running lightweight JavaScript functions at the edge of Cloudflare's global network, paired with Durable Objects that provide sticky state for peer matching. Tools like <a href="https://www.4share.work">4share</a> use this architecture to coordinate WebRTC connections between browsers worldwide, with signaling latencies under 50 milliseconds and automatic scaling to any traffic volume. The key insight is that signaling messages are tiny JSON payloads exchanged over WebSockets — the ideal workload for serverless edge computing.</p>
+
+<p>This article explains how the Cloudflare Workers architecture handles real-time signaling, why edge execution matters for connection setup speed, and how Durable Objects provide the stateful coordination that WebRTC signaling requires.</p>
+
+<h2 id="signaling-role">Why Signaling Servers Matter for P2P Transfer</h2>
+
+<p>A common misconception about peer-to-peer file transfer is that no server is involved. While file data flows directly between devices, a signaling server is essential for establishing the connection. The signaling server helps two peers discover each other, exchange network addresses, and negotiate connection parameters.</p>
+
+<h3>What Signaling Actually Does</h3>
+
+<p>Signaling is the process of exchanging connection metadata between two peers before the P2P connection is established. This metadata includes:</p>
+
+<ul>
+<li><strong>SDP offers and answers:</strong> Session descriptions that list each peer's capabilities — supported codecs, data channel parameters, and encryption methods.</li>
+<li><strong>ICE candidates:</strong> Network addresses (public IPs, port mappings, relay addresses) that each peer can be reached at.</li>
+<li><strong>Session management:</strong> Matching a sender with the correct receiver using a transfer code, room ID, or session identifier.</li>
+<li><strong>Presence notifications:</strong> Informing each peer when the other is online and ready to connect.</li>
+</ul>
+
+<p>Signaling messages are small — typically 1 to 5 KB each. A complete signaling exchange involves about 6 to 10 messages (SDP offer, SDP answer, ICE candidates from both sides, connection confirmation). The entire signaling phase takes under 1 second.</p>
+
+<h3>Why Signaling Must Be Fast</h3>
+
+<p>The speed of signaling directly affects the user's perceived connection time. When a user enters a transfer code, the time between pressing "Connect" and seeing the transfer start is the signaling latency. If signaling takes 500 milliseconds, the user waits half a second before the file starts transferring. If it takes 5 seconds, the user thinks something is broken.</p>
+
+<p>For a P2P file transfer tool, signaling latency under 100 milliseconds is the target. This requires the signaling server to be geographically close to both peers, process messages quickly, and deliver them without delay.</p>
+
+<h2 id="architecture">The Cloudflare Workers Architecture for Signaling</h2>
+
+<p>Cloudflare Workers provide a serverless platform that runs JavaScript at the edge of Cloudflare's global network. Here is how the architecture works for signaling:</p>
+
+<p><strong>Architecture Diagram (text representation):</strong></p>
+
+<pre>
+Sender's Browser                Cloudflare Edge Network              Receiver's Browser
+       │                         ┌──────────────────┐                       │
+       │── WebSocket ───────────►│  Nearest PoP      │◄── WebSocket ────────│
+       │   (signaling msg)       │  (300+ locations) │   (signaling msg)    │
+       │                         │                    │                      │
+       │                         │  ┌──────────────┐ │                      │
+       │                         │  │ Cloudflare    │ │                      │
+       │                         │  │ Worker        │ │                      │
+       │                         │  │ (JS function) │ │                      │
+       │                         │  └──────┬───────┘ │                      │
+       │                         │         │         │                      │
+       │                         │  ┌──────▼───────┐ │                      │
+       │                         │  │ Durable      │ │                      │
+       │                         │  │ Object       │ │                      │
+       │                         │  │ (room state) │ │                      │
+       │                         │  └──────────────┘ │                      │
+       │                         └──────────────────┘                      │
+       │                                                                    │
+       │◄═══════════════════ Direct P2P Connection ═══════════════════════►│
+       │              (WebRTC Data Channel - encrypted)                     │
+</pre>
+
+<h3>The Request Flow</h3>
+
+<ol>
+<li><strong>User A opens 4share and selects a file.</strong> The browser establishes a WebSocket connection to the nearest Cloudflare PoP (Point of Presence).</li>
+<li><strong>Cloudflare Worker creates a signaling room.</strong> A Durable Object is instantiated to manage the room state.</li>
+<li><strong>User B enters the transfer code.</strong> Their browser connects to the same Durable Object (routed by room ID) via WebSocket.</li>
+<li><strong>SDP and ICE candidates are exchanged.</strong> The Worker relays messages between the two peers through the Durable Object.</li>
+<li><strong>Direct connection established.</strong> WebRTC data channel opens. Signaling WebSocket is no longer needed.</li>
+<li><strong>File transfer proceeds peer-to-peer.</strong> The Worker and Durable Object are not involved in file data.</li>
+</ol>
+
+<h2 id="durable-objects">Durable Objects: Stateful Coordination at the Edge</h2>
+
+<p>Cloudflare Workers are stateless by default — each request runs in an isolated V8 isolate with no shared memory. But WebRTC signaling requires state: you need to match two peers in the same room, deliver messages in order, and track connection state. Durable Objects solve this problem.</p>
+
+<h3>What Durable Objects Provide</h3>
+
+<ul>
+<li><strong>Strong consistency:</strong> A Durable Object is a single-threaded, globally unique instance. Only one instance handles requests for a given room ID at any time. This eliminates race conditions and ensures messages are processed in order.</li>
+<li><strong>Persistent storage:</strong> Durable Objects can store state in a key-value store that survives restarts. If a Durable Object is evicted from memory, its state is restored from storage when a new request arrives.</li>
+<li><strong>WebSocket support:</strong> Durable Objects can hold WebSocket connections, allowing real-time bidirectional communication between the Worker and connected clients.</li>
+<li><strong>Global routing:</strong> Requests to a Durable Object are automatically routed to the correct instance, regardless of which Cloudflare PoP the request arrives at.</li>
+</ul>
+
+<h3>How Durable Objects Handle Signaling</h3>
+
+<p>Each file transfer session is backed by a Durable Object. The Durable Object:</p>
+
+<ol>
+<li><strong>Receives the SDP offer</strong> from the sender's browser via WebSocket.</li>
+<li><strong>Stores the offer</strong> in its in-memory state.</li>
+<li><strong>Waits for the receiver</strong> to connect (polling or WebSocket).</li>
+<li><strong>Delivers the SDP offer</strong> to the receiver when they connect.</li>
+<li><strong>Receives the SDP answer</strong> from the receiver and delivers it to the sender.</li>
+<li><strong>Relays ICE candidates</strong> between both peers.</li>
+<li><strong>Cleans up</strong> after the connection is established or the session expires.</li>
+</ol>
+
+<h3>Code Example: Durable Object for Signaling</h3>
+
+<pre>
+// Simplified Durable Object for WebRTC signaling
+export class SignalingRoom {
+  constructor(state, env) {
+    this.state = state;
+    this.peers = new Map(); // peerId → WebSocket
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+    const peerId = url.searchParams.get('peer');
+    
+    if (request.headers.get('Upgrade') === 'websocket') {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+      
+      this.peers.set(peerId, server);
+      this.handleWebSocket(server, peerId);
+      
+      return new Response(null, { status: 101, webSocket: client });
+    }
+    
+    // Handle HTTP signaling messages
+    const message = await request.json();
+    await this.routeMessage(message, peerId);
+    return new Response('ok');
+  }
+
+  async routeMessage(message, fromPeer) {
+    for (const [peerId, ws] of this.peers) {
+      if (peerId !== fromPeer) {
+        ws.send(JSON.stringify(message));
+      }
+    }
+  }
+}
+</pre>
+
+<p>This simplified code shows the core pattern: each peer connects via WebSocket, and the Durable Object routes messages between them. The actual implementation adds error handling, timeout logic, and cleanup, but the fundamental mechanism is this straightforward.</p>
+
+<h2 id="websocket">WebSocket Signaling in Workers</h2>
+
+<p>WebSocket is the transport layer for signaling in Cloudflare Workers. Unlike HTTP request-response, WebSockets provide a persistent, bidirectional connection between the browser and the Worker.</p>
+
+<h3>Why WebSockets for Signaling</h3>
+
+<ul>
+<li><strong>Low latency:</strong> Messages are delivered immediately without HTTP overhead. A signaling message can travel from one peer to the other in under 10 milliseconds.</li>
+<li><strong>Bidirectional:</strong> Either peer can send a message at any time. This is important for ICE candidates, which are gathered asynchronously and sent as they become available.</li>
+<li><strong>Connection multiplexing:</strong> A single WebSocket connection carries all signaling messages for a session. No need to establish a new HTTP connection for each message.</li>
+<li><strong>Cloudflare support:</strong> Cloudflare Workers support WebSocket upgrade and message handling natively, with no additional configuration.</li>
+</ul>
+
+<h3>WebSocket Lifecycle in Signaling</h3>
+
+<pre>
+Browser                                      Cloudflare Worker
+  │                                              │
+  │── HTTP Upgrade (WebSocket) ─────────────────►│
+  │◄── 101 Switching Protocols ──────────────────│
+  │                                              │
+  │── { type: "offer", sdp: "..." } ────────────►│  ← SDP offer
+  │◄── { type: "offer", sdp: "..." } ────────────│  ← Relayed to peer
+  │                                              │
+  │── { type: "candidate", ... } ───────────────►│  ← ICE candidate
+  │◄── { type: "candidate", ... } ───────────────│  ← Relayed to peer
+  │                                              │
+  │── { type: "answer", sdp: "..." } ───────────►│  ← SDP answer
+  │                                              │
+  │  ... Direct P2P connection established ...   │
+  │                                              │
+  │── WebSocket close ───────────────────────────►│  ← Cleanup
+  │                                              │
+</pre>
+
+<p>The WebSocket connection is short-lived — typically under 5 seconds. Once the P2P connection is established, the WebSocket is closed and the Worker/Durable Object is cleaned up. This short lifetime is important for cost efficiency.</p>
+
+<h2 id="edge-execution">Edge Execution: Why Latency Matters</h2>
+
+<p>Cloudflare Workers run at the edge — in over 300 data centers distributed across the globe. When a user in Tokyo connects to 4share, their WebSocket connects to the nearest Cloudflare PoP (likely in Tokyo or Osaka), not to a centralized server in Virginia.</p>
+
+<h3>Edge vs. Centralized Architecture</h3>
+
+<table>
+<thead>
+<tr><th>Metric</th><th>Edge (Cloudflare Workers)</th><th>Centralized (e.g., us-east-1)</th></tr>
+</thead>
+<tbody>
+<tr><td>Connection latency (same region)</td><td>5–15 ms</td><td>80–200 ms</td></tr>
+<tr><td>Connection latency (cross-region)</td><td>15–30 ms</td><td>150–300 ms</td></tr>
+<tr><td>Signaling completion time</td><td>30–80 ms</td><td>200–600 ms</td></tr>
+<tr><td>Cold start time</td><td>&lt; 5 ms</td><td>100–500 ms (container spin-up)</td></tr>
+</tbody>
+</table>
+
+<p>The difference is dramatic. A signaling exchange that takes 40 milliseconds through edge Workers would take 300+ milliseconds through a centralized server. For P2P file transfer, this latency directly affects how quickly the user sees the transfer start.</p>
+
+<h3>How Edge Execution Works</h3>
+
+<p>When a browser connects to 4share, DNS resolves to the nearest Cloudflare PoP. The WebSocket handshake completes at that PoP, and the Worker function runs locally. If a Durable Object is involved, Cloudflare routes the request to the PoP where the Durable Object's state lives (typically the PoP closest to the first peer).</p>
+
+<pre>
+User in London                     Cloudflare Network
+       │                            ┌──────────────┐
+       │── WebSocket ──────────────►│  London PoP  │
+       │   (connect to 4share)      │  Worker runs │
+       │                            │  locally     │
+       │                            └──────┬───────┘
+       │                                   │
+       │                            ┌──────▼───────┐
+       │                            │  Durable     │
+       │                            │  Object      │
+       │                            │  (London)    │
+       │                            └──────────────┘
+       
+User in Tokyo                       Cloudflare Network
+       │                            ┌──────────────┐
+       │── WebSocket ──────────────►│  Tokyo PoP   │
+       │   (connect to 4share)      │  Worker runs │
+       │                            │  locally     │
+       │                            └──────┬───────┘
+       │                                   │
+       │                            ┌──────▼───────┐
+       │                            │  Durable     │
+       │                            │  Object      │──── routed to London
+       │                            │  (routed)    │     where sender's
+       │                            └──────────────┘     state lives
+</pre>
+
+<p>Even though the Durable Object's state is in London, the Tokyo user's messages reach it quickly because Cloudflare's internal network is highly optimized. The total round-trip time is typically under 50 milliseconds.</p>
+
+<h2 id="scaling">Scaling to Millions of Concurrent Transfers</h2>
+
+<p>Cloudflare Workers auto-scale to handle any traffic level. There is no capacity planning, no server provisioning, and no scaling triggers. Each incoming request spawns a new V8 isolate (or reuses a warm one) and executes the Worker function.</p>
+
+<h3>Scaling Characteristics</h3>
+
+<ul>
+<li><strong>Requests per second:</strong> Cloudflare Workers handle millions of requests per second across the network. Individual Worker scripts can handle thousands of concurrent requests.</li>
+<li><strong>Concurrent connections:</strong> WebSocket connections are held by Durable Objects, which can maintain thousands of concurrent connections per instance.</li>
+<li><strong>Global distribution:</strong> Traffic is automatically distributed across 300+ PoPs. No single data center handles all requests.</li>
+<li><strong>Automatic scaling:</strong> No configuration needed. As traffic increases, Cloudflare allocates more resources automatically.</li>
+</ul>
+
+<h3>Scaling for Peak Demand</h3>
+
+<p>P2P file transfer has bursty traffic patterns. A popular tool might see a spike in usage during business hours (people sharing files with colleagues) and a lull at night. Cloudflare Workers handle this gracefully because they scale on a per-request basis. There are no idle servers to maintain during quiet periods, and no capacity shortage during peaks.</p>
+
+<p>For signaling specifically, the workload is extremely lightweight. A signaling Worker processes tiny JSON messages (1–5 KB) with minimal computation. The bottleneck is not CPU or memory — it is WebSocket connection handling, which Cloudflare's infrastructure manages efficiently.</p>
+
+<h3>Performance Under Load</h3>
+
+<table>
+<thead>
+<tr><th>Concurrent Transfers</th><th>Worker CPU Time (avg)</th><th>Signaling Latency</th><th>Memory per Connection</th></tr>
+</thead>
+<tbody>
+<tr><td>100</td><td>0.5 ms</td><td>15 ms</td><td>~2 KB</td></tr>
+<tr><td>1,000</td><td>0.5 ms</td><td>20 ms</td><td>~2 KB</td></tr>
+<tr><td>10,000</td><td>0.6 ms</td><td>30 ms</td><td>~2 KB</td></tr>
+<tr><td>100,000</td><td>0.7 ms</td><td>40 ms</td><td>~2 KB</td></tr>
+</tbody>
+</table>
+
+<p>The key insight is that signaling is a "thin" workload. The Worker does very little computation — it just relays messages between two peers. The actual heavy lifting (file transfer) happens peer-to-peer, outside the Worker entirely.</p>
+
+<h2 id="security">Security: Isolating Signaling from File Data</h2>
+
+<p>One of the most important security properties of this architecture is the separation between signaling and file data. The Cloudflare Worker handles only signaling — tiny JSON messages that describe how to establish a connection. It never sees, stores, or processes file data.</p>
+
+<h3>Security Properties</h3>
+
+<ul>
+<li><strong>Data isolation:</strong> File data flows directly between peers via WebRTC. The Worker never has access to file contents.</li>
+<li><strong>Encryption:</strong> WebRTC data channels are encrypted with DTLS. Even if the Worker were compromised, it could not read file data.</li>
+<li><strong>Ephemeral state:</strong> Signaling state is deleted after the session expires. No transfer metadata is persisted long-term.</li>
+<li><strong>V8 isolation:</strong> Each Worker runs in an isolated V8 isolate. Workers cannot access each other's state or memory.</li>
+<li><strong>No file storage:</strong> Cloudflare Workers have no file system access. File data cannot be written to disk even if the code tried.</li>
+</ul>
+
+<h3>Attack Surface Analysis</h3>
+
+<p>The signaling server is a potential target because it matches peers and relays connection metadata. An attacker who compromises the signaling server could:</p>
+
+<ul>
+<li><strong>Redirect a transfer:</strong> Send a malicious SDP offer to redirect the connection to an attacker-controlled peer.</li>
+<li><strong>Deny service:</strong> Refuse to relay signaling messages, preventing connections from being established.</li>
+<li><strong>Observe metadata:</strong> See which transfer codes are being used and when transfers occur (but not file contents).</li>
+</ul>
+
+<p>Mitigations include validating signaling messages, rate-limiting connections per transfer code, and ensuring transfer codes are cryptographically random and short-lived.</p>
+
+<h2 id="cost">Cost Analysis: Running Signaling at Scale</h2>
+
+<p>Cloudflare Workers pricing is based on requests and CPU time. For signaling, the cost is remarkably low because each request is tiny and short-lived.</p>
+
+<h3>Cost Breakdown</h3>
+
+<table>
+<thead>
+<tr><th>Metric</th><th>Per Signaling Session</th><th>100K Sessions/Day</th><th>10M Sessions/Day</th></tr>
+</thead>
+<tbody>
+<tr><td>Requests</td><td>~10</td><td>1M</td><td>100M</td></tr>
+<tr><td>CPU time</td><td>~5 ms</td><td>500 seconds</td><td>50,000 seconds</td></tr>
+<tr><td>Worker cost</td><td>~$0.0000005</td><td>$0.05</td><td>$5.00</td></tr>
+<tr><td>Durable Object cost</td><td>~$0.000001</td><td>$0.10</td><td>$10.00</td></tr>
+<tr><td>WebSocket cost</td><td>~$0.0000002</td><td>$0.02</td><td>$2.00</td></tr>
+<tr><td><strong>Total</strong></td><td><strong>~$0.000002</strong></td><td><strong>~$0.17</strong></td><td><strong>~$17.00</strong></td></tr>
+</tbody>
+</table>
+
+<p>At 10 million signaling sessions per day (which would correspond to millions of file transfers), the total Cloudflare Workers cost is approximately $17 per day. This is dramatically cheaper than running dedicated signaling servers, which would require multiple machines, load balancers, and operations staff.</p>
+
+<h3>Free Tier Coverage</h3>
+
+<p>Cloudflare Workers' free tier includes 10 million requests per month. For a tool like 4share that handles signaling for file transfers, this free tier covers a significant amount of usage before any payment is needed. Even at 100,000 transfers per day, the free tier covers most of the signaling requests.</p>
+
+<h2 id="vs-traditional">Cloudflare Workers vs. Traditional Signaling Servers</h2>
+
+<p>Let us compare the Cloudflare Workers approach to a traditional signaling server deployment:</p>
+
+<table>
+<thead>
+<tr><th>Aspect</th><th>Cloudflare Workers</th><th>Traditional Node.js Server</th></tr>
+</thead>
+<tbody>
+<tr><td>Deployment</td><td>Zero-config, push to deploy</td><td>Server provisioning, deployment pipeline</td></tr>
+<tr><td>Scaling</td><td>Automatic, unlimited</td><td>Manual scaling, load balancers</td></tr>
+<tr><td>Latency</td><td>5–30 ms (edge)</td><td>50–200 ms (centralized)</td></tr>
+<tr><td>Cost (low volume)</td><td>Free (under 10M requests/month)</td><td>$20–50/month minimum</td></tr>
+<tr><td>Cost (high volume)</td><td>Pay per request</td><td>Pay per server</td></tr>
+<tr><td>State management</td><td>Durable Objects (built-in)</td><td>Redis/Memcached (external)</td></tr>
+<tr><td>Reliability</td><td>Cloudflare's global network</td><td>You manage it</td></tr>
+<tr><td>Operations</td><td>None (serverless)</td><td>Monitoring, patching, scaling</td></tr>
+</tbody>
+</table>
+
+<p>For a P2P file transfer tool, Cloudflare Workers are the clear choice. Signaling is the perfect workload for serverless edge computing: tiny messages, short-lived connections, globally distributed users, and the need for low latency.</p>
+
+<h2 id="architecture-deep">Deep Dive: The Signaling Protocol Flow</h2>
+
+<p>Here is the complete signaling protocol flow for a file transfer session using Cloudflare Workers and Durable Objects:</p>
+
+<ol>
+<li><strong>Sender generates transfer code:</strong> The browser requests a new transfer session from the Worker. The Worker creates a Durable Object instance with a unique ID and returns a transfer code (e.g., "A3K9M2") to the sender.</li>
+<li><strong>Sender connects via WebSocket:</strong> The browser opens a WebSocket to the Durable Object, passing the transfer code as authentication. The Durable Object registers the sender's WebSocket.</li>
+<li><strong>Sender creates SDP offer:</strong> The browser creates an RTCPeerConnection, generates an SDP offer, and sends it through the WebSocket to the Durable Object.</li>
+<li><strong>Receiver connects:</strong> The receiver enters the transfer code on their browser. The browser connects to the same Durable Object via WebSocket. The Durable Object registers the receiver's WebSocket.</li>
+<li><strong>Durable Object delivers SDP offer:</strong> The Durable Object sends the stored SDP offer to the receiver's WebSocket.</li>
+<li><strong>Receiver creates SDP answer:</strong> The browser processes the offer, creates an SDP answer, and sends it back through the WebSocket. The Durable Object delivers it to the sender.</li>
+<li><strong>ICE candidates exchanged:</strong> Both browsers gather ICE candidates (host, server-reflexive, relay) and send them through the WebSocket. The Durable Object relays each candidate to the other peer.</li>
+<li><strong>Connectivity checks:</strong> Both browsers send STUN binding requests to each candidate pair. The first successful check establishes the connection path.</li>
+<li><strong>DTLS handshake:</strong> The browsers perform a DTLS handshake over the selected path, establishing encryption keys.</li>
+<li><strong>Data channel opens:</strong> An RTCDataChannel is ready for file data. Both browsers close their signaling WebSockets.</li>
+<li><strong>Durable Object cleans up:</strong> The Durable Object deletes its state and terminates. No further server resources are consumed.</li>
+</ol>
+
+<p>The entire process from step 1 to step 10 takes under 2 seconds in most cases, with the signaling phase (steps 3–9) completing in under 500 milliseconds. On a local network or between peers in the same city, the full connection setup — including ICE checks and DTLS — can complete in under 200 milliseconds.</p>
+
+<div class="cta-box"><h3>Try 4share Free</h3><p>Transfer files instantly with no ads, no limits, and no signup.</p><a href="https://www.4share.work">Open 4share →</a></div>
+
+<section class="faq"><h2>Frequently Asked Questions</h2>
+
+<details>
+<summary>What are Cloudflare Workers?</summary>
+<p>Cloudflare Workers are serverless JavaScript functions that run on Cloudflare's global edge network of over 300 data centers. They execute at the edge, close to the user, with cold start times under 5 milliseconds.</p>
+</details>
+
+<details>
+<summary>Why use Cloudflare Workers for WebRTC signaling?</summary>
+<p>WebRTC signaling requires low-latency message exchange between peers. Cloudflare Workers run at the edge, reducing round-trip time. Durable Objects provide sticky state for matching peers, and WebSocket support enables real-time signaling.</p>
+</details>
+
+<details>
+<summary>What are Durable Objects?</summary>
+<p>Durable Objects are a Cloudflare Workers feature that provides strongly consistent, single-instance state for coordinating between connections. Each signaling room is backed by a Durable Object that ensures messages are delivered in order and peers are matched correctly.</p>
+</details>
+
+<details>
+<summary>How fast is signaling through Cloudflare Workers?</summary>
+<p>Signaling through Cloudflare Workers typically completes in under 50 milliseconds. Because Workers run at the edge, the WebSocket connection is established to the nearest data center, minimizing latency.</p>
+</details>
+
+<details>
+<summary>Can Cloudflare Workers scale to millions of users?</summary>
+<p>Yes. Cloudflare Workers auto-scale to handle any traffic level. Each request runs in an isolated V8 isolate with no cold start penalty. The infrastructure scales horizontally across 300+ data centers worldwide.</p>
+</details>
+
+<details>
+<summary>What is the cost of running signaling on Cloudflare Workers?</summary>
+<p>Cloudflare Workers have a generous free tier of 10 million requests per month. Paid plans start at $5/month. For signaling, which involves tiny JSON messages, costs are minimal even at high volume.</p>
+</details>
+
+<details>
+<summary>How does WebSocket support work in Cloudflare Workers?</summary>
+<p>Cloudflare Workers support WebSocket connections via the WebSocket API. When a client connects, the Worker can accept the WebSocket, upgrade the HTTP connection, and exchange messages in real time. Durable Objects can hold WebSocket connections for coordination.</p>
+</details>
+
+<details>
+<summary>Is Cloudflare Workers better than a traditional Node.js server for signaling?</summary>
+<p>For signaling, Cloudflare Workers offer significant advantages: edge execution reduces latency, auto-scaling eliminates capacity planning, Durable Objects simplify state management, and the pay-per-request pricing is cost-effective for signaling workloads.</p>
+</details>
+
+</section>
+
+<section class="related"><h3>Related Articles</h3><div class="related-grid">
+<a href="/blog/webrtc-file-transfer.html" class="related-card"><h4>How WebRTC Enables Direct Browser-to-Browser File Transfer</h4><p>The complete WebRTC architecture for P2P file sharing.</p></a>
+<a href="/blog/nat-traversal-explained.html" class="related-card"><h4>Understanding NAT Traversal and Why P2P Connections Work</h4><p>How ICE, STUN, and TURN help WebRTC connections succeed.</p></a>
+<a href="/blog/six-digit-transfer-code.html" class="related-card"><h4>How 6-Digit Transfer Codes Work for Secure File Matching</h4><p>The protocol behind simple transfer codes for P2P matching.</p></a>
+</div></section>
+</article>
+</main>
+<footer class="site-footer"><div class="container"><p>© 2026 4share — P2P File Transfer</p><nav><a href="/blog/">Blog</a><a href="/about/">About</a><a href="/privacy/">Privacy</a></nav></div></footer>
+</body>
+</html>

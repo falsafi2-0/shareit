@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>How 6-Digit Transfer Codes Work for Secure File Matching | 4share</title>
+<meta name="description" content="6 digit transfer code explained: how short alphanumeric codes securely match P2P file transfer peers without accounts, emails, or personal data.">
+<link rel="stylesheet" href="/blog/style.css">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Article", "headline": "How 6-Digit Transfer Codes Work for Secure File Matching", "author": {"@type": "Organization", "name": "4share"}, "datePublished": "2026-01-20", "dateModified": "2026-01-20", "description": "6 digit transfer code explained: how short alphanumeric codes securely match P2P file transfer peers without accounts, emails, or personal data."}
+</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is a 6-digit transfer code?", "acceptedAnswer": {"@type": "Answer", "text": "A 6-digit transfer code is a short, randomly generated identifier that links a sender and receiver for a P2P file transfer. The sender generates the code, shares it with the receiver (via text, voice, or QR code), and the receiver enters it to connect directly to the sender's device."}}, {"@type": "Question", "name": "How secure is a 6-digit code?", "acceptedAnswer": {"@type": "Answer", "text": "A 6-digit alphanumeric code has millions of possible combinations. Combined with short expiration times (typically 5–10 minutes) and rate limiting on connection attempts, brute-force attacks are infeasible. An attacker would need to guess the correct code, be online within the expiration window, and connect to the correct signaling room."}}, {"type": "Question", "name": "Why not use a longer code like a UUID?", "acceptedAnswer": {"@type": "Answer", "text": "Longer codes are more secure but harder for humans to share. A 6-digit code can be read over the phone, typed quickly, or scanned from a QR code. UUIDs (36 characters) are error-prone to type and impossible to read aloud. The 6-digit format balances security with usability."}}, {"@type": "Question", "name": "How is the code generated?", "acceptedAnswer": {"@type": "Answer", "text": "The code is generated using a cryptographically secure random number generator (CSPRNG). Each character is selected independently from a set of allowed characters (digits and/or letters), ensuring uniform distribution and unpredictability."}}, {"@type": "Question", "name": "How long does a transfer code last?", "acceptedAnswer": {"@type": "Answer", "text": "Transfer codes typically expire after 5–10 minutes. After expiration, the code can no longer be used to connect. The sender can generate a new code if needed. This short window limits the time an attacker has to guess or intercept the code."}}, {"@type": "Question", "name": "Can someone guess my transfer code?", "acceptedAnswer": {"@type": "Answer", "text": "Guessing a 6-digit code is extremely unlikely. With rate limiting (typically 3–5 failed attempts before temporary lockout), an attacker would need thousands of years to brute-force all combinations. The code also expires quickly, further reducing the attack window."}}, {"@type": "Question", "name": "Can transfer codes be intercepted?", "acceptedAnswer": {"@type": "Answer", "text": "The code itself is not encrypted — it is shared via text, voice, or QR code. However, knowing the code only allows the attacker to attempt a connection. The actual file data is encrypted end-to-end via DTLS, so even a successful connection does not expose file contents without the encryption keys."}}, {"@type": "Question", "name": "Why not use email or phone number for matching?", "acceptedAnswer": {"@type": "Answer", "text": "Using email or phone number requires account creation and personal data collection. Transfer codes provide anonymous matching — no personal information is needed or stored. This is faster (no signup), more private (no data collection), and works across platforms without accounts."}}]}
+</script>
+</head>
+<body>
+<header class="site-header"><div class="container"><a href="/" class="logo"><span>4</span>share</a><nav><a href="/blog/">Blog</a><a href="/tutorial/">Tutorial</a><a href="/transfer/large-files/">Send Large Files</a><a href="/about/">About</a></nav></div></header>
+<main class="container">
+<article>
+<div class="breadcrumb"><a href="/blog/">Blog</a> &gt; <a href="/blog/category/deep-dives/">Deep Dives</a></div>
+<h1>How 6-Digit Transfer Codes Work for Secure File Matching</h1>
+<div class="meta"><span>Published: Jan 2026</span><span>Category: Deep Dives</span><span>10 min read</span></div>
+<div class="toc"><h3>Table of Contents</h3><ol>
+<li><a href="#what-are-codes">What Are Transfer Codes and Why Do They Exist?</a></li>
+<li><a href="#generation">Code Generation: Cryptographic Randomness</a></li>
+<li><a href="#matching">The Matching Protocol: Connecting Sender to Receiver</a></li>
+<li><a href="#security-model">The Security Model: Why 6 Digits Is Enough</a></li>
+<li><a href="#timing">Timing: Expiration, Cleanup, and Replay Protection</a></li>
+<li><a href="#vs-alternatives">Transfer Codes vs. Alternatives (Links, QR, Email)</a></li>
+<li><a href="#failure-modes">Failure Modes and Edge Cases</a></li>
+<li><a href="#implementation">Implementation: From Code to Connection</a></li>
+<li><a href="#privacy">Privacy: What the Code Reveals (and What It Does Not)</a></li>
+<li><a href="#ux">User Experience: Why Short Codes Win</a></li>
+</ol></div>
+
+<p>A 6-digit transfer code is a short, randomly generated identifier that securely matches a file sender with a receiver for peer-to-peer transfer. Tools like <a href="https://www.4share.work">4share</a> use these codes so users can connect without accounts, email addresses, or personal data — the sender generates a code, shares it verbally or via text, and the receiver enters it to establish a direct encrypted connection. The code is generated using a cryptographically secure random number generator, expires after a short window (typically 5–10 minutes), and is protected by rate limiting against brute-force attacks.</p>
+
+<p>This article explains how transfer codes are generated, how they match peers through the signaling server, why 6 digits provides adequate security, and how the design balances security with usability.</p>
+
+<h2 id="what-are-codes">What Are Transfer Codes and Why Do They Exist?</h2>
+
+<p>For two browsers to connect via WebRTC, they need a way to find each other. In a P2P file transfer tool, this means the sender's browser and the receiver's browser must be matched through the signaling server. The matching mechanism is the transfer code.</p>
+
+<h3>The Matching Problem</h3>
+
+<p>When the sender opens 4share and selects a file, their browser connects to the signaling server and waits for a receiver. The receiver needs to tell the signaling server "I want to connect to that specific sender." The transfer code is the identifier that links the two.</p>
+
+<p><strong>Matching Diagram (text representation):</strong></p>
+
+<pre>
+Sender's Browser                  Signaling Server                  Receiver's Browser
+       │                               │                                │
+       │── "Create room" ─────────────►│                                │
+       │                               │── Creates Durable Object       │
+       │◄── "Code: A3K9M2" ────────────│                                │
+       │                               │                                │
+       │   (Sender shares code         │                                │
+       │    via text, voice, QR)       │                                │
+       │                               │                                │
+       │                               │◄── "Join room A3K9M2" ─────────│
+       │                               │── Validates code                │
+       │                               │── Connects to sender's room     │
+       │                               │                                │
+       │◄── SDP offer (via server) ────│──► SDP offer ──────────────────►│
+       │── SDP answer ────────────────►│──► SDP answer ─────────────────►│
+       │                               │                                │
+       │◄═════════════ Direct P2P connection established ════════════════►│
+</pre>
+
+<h3>Why Not Use Something Else?</h3>
+
+<p>There are many ways to match two peers. Here is why transfer codes are the preferred approach for P2P file transfer:</p>
+
+<ul>
+<li><strong>Email-based matching:</strong> Requires account creation, stores personal data, adds friction (inbox verification). Not anonymous.</li>
+<li><strong>Phone number matching:</strong> Requires SMS verification, stores phone numbers, does not work across all regions. Not anonymous.</li>
+<li><strong>Link sharing:</strong> URLs can be long, break in text messages, and are harder to share verbally. Links also expose the signaling server address in the URL.</li>
+<li><strong>QR codes:</strong> Excellent for nearby devices, but require both devices to have cameras and be physically close. Not suitable for remote transfers.</li>
+<li><strong>Device discovery (mDNS/Bonjour):</strong> Only works on the same local network. Useless for remote transfers.</li>
+</ul>
+
+<p>Transfer codes combine the best properties: short enough to share verbally, unique enough to identify a specific session, anonymous (no personal data), and works for both nearby and remote transfers.</p>
+
+<h2 id="generation">Code Generation: Cryptographic Randomness</h2>
+
+<p>The security of a transfer code depends on how it is generated. A predictable code is a weak code. 4share uses cryptographically secure random number generation to ensure codes are unpredictable.</p>
+
+<h3>CSPRNG in the Browser</h3>
+
+<p>Modern browsers provide the <code>crypto.getRandomValues()</code> API, which uses the operating system's cryptographically secure random number generator (CSPRNG). This is the same source of randomness used for encryption keys, session tokens, and other security-critical values.</p>
+
+<pre>
+function generateTransferCode() {
+  const characters = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 32 chars (no I, O, 0, 1)
+  const codeLength = 6;
+  const array = new Uint8Array(codeLength);
+  crypto.getRandomValues(array);
+  
+  let code = '';
+  for (let i = 0; i < codeLength; i++) {
+    code += characters[array[i] % characters.length];
+  }
+  return code;
+}
+// Example output: "A3K9M2"
+</pre>
+
+<h3>Character Set Design</h3>
+
+<p>The character set is carefully chosen to avoid ambiguous characters:</p>
+
+<ul>
+<li><strong>Excluded:</strong> I, l (ambiguous with 1), O, 0 (ambiguous with O), 1 (ambiguous with l or I)</li>
+<li><strong>Included:</strong> A-Z (26 letters) + 2-9 (8 digits) = 34 characters (or 32 after removing more ambiguous pairs)</li>
+</ul>
+
+<p>With 32 characters and 6 positions, the total number of possible codes is:</p>
+
+<pre>
+32^6 = 1,073,741,824 (approximately 1 billion)
+</pre>
+
+<p>One billion possible codes means an attacker has a 1 in 1 billion chance of guessing the correct code on the first try.</p>
+
+<h3>Why Not Use UUIDs?</h3>
+
+<p>A UUID (Universally Unique Identifier) has 128 bits of randomness, providing 2^128 possible values — astronomically more than 6 alphanumeric characters. However, UUIDs are 36 characters long (e.g., "550e8400-e29b-41d4-a716-446655440000"). They are:</p>
+
+<ul>
+<li>Impossible to read aloud without errors.</li>
+<li>Difficult to type accurately on a mobile keyboard.</li>
+<li>Too long to share via text without copy-paste.</li>
+<li>Not human-friendly in any way.</li>
+</ul>
+
+<p>The 6-digit code trades theoretical maximum entropy for practical usability. One billion combinations is more than sufficient when combined with rate limiting and time expiration.</p>
+
+<h2 id="matching">The Matching Protocol: Connecting Sender to Receiver</h2>
+
+<p>Once the code is generated and shared, the matching protocol connects the two peers through the signaling server. Here is the detailed flow:</p>
+
+<ol>
+<li><strong>Sender creates a room:</strong> The sender's browser sends a request to the signaling server to create a new signaling room. The server creates a Durable Object instance and returns a transfer code.</li>
+<li><strong>Sender waits:</strong> The sender's browser opens a WebSocket connection to the Durable Object and waits for the receiver to connect.</li>
+<li><strong>Receiver enters code:</strong> The receiver's browser sends a request to the signaling server with the transfer code. The server looks up the corresponding Durable Object.</li>
+<li><strong>Server validates code:</strong> The server checks that the code exists, has not expired, and has not exceeded the maximum number of connection attempts.</li>
+<li><strong>Receiver connects:</strong> If the code is valid, the receiver's browser opens a WebSocket connection to the same Durable Object. The server notifies the sender that a receiver has connected.</li>
+<li><strong>Signaling begins:</strong> The Durable Object relays SDP offers, answers, and ICE candidates between the two peers.</li>
+<li><strong>P2P connection established:</strong> Once ICE completes, the direct WebRTC connection is established. The WebSocket connections are closed.</li>
+</ol>
+
+<h3>Code Validation Server-Side</h3>
+
+<pre>
+// Simplified server-side code validation
+async function validateTransferCode(code, env) {
+  // Check format
+  if (!/^[A-Z2-9]{6}$/.test(code)) {
+    return { valid: false, error: 'Invalid code format' };
+  }
+  
+  // Look up the Durable Object for this code
+  const roomId = await env.TRANSING_ROOMS.get(code);
+  if (!roomId) {
+    return { valid: false, error: 'Code not found' };
+  }
+  
+  // Check expiration
+  const room = env.TRANSING_ROOMS.get(roomId);
+  const state = await room.storage.getMetadata();
+  if (Date.now() - state.createdAt > EXPIRATION_MS) {
+    return { valid: false, error: 'Code expired' };
+  }
+  
+  // Check connection attempts
+  const attempts = await room.storage.get('attempts') || 0;
+  if (attempts >= MAX_ATTEMPTS) {
+    return { valid: false, error: 'Too many attempts' };
+  }
+  
+  return { valid: true, roomId };
+}
+</pre>
+
+<h2 id="security-model">The Security Model: Why 6 Digits Is Enough</h2>
+
+<p>A common concern is whether a 6-digit code is "secure enough." The answer depends on the threat model. For P2P file transfer, the security requirements are different from password authentication.</p>
+
+<h3>Threat Model</h3>
+
+<p>The attacker's goal is to connect to a sender's room and intercept or participate in the file transfer. The attack vectors are:</p>
+
+<ul>
+<li><strong>Brute-force guessing:</strong> Try all possible codes until the correct one is found.</li>
+<li><strong>Code interception:</strong> Intercept the code as it is shared between sender and receiver.</li>
+<li><strong>Replay attack:</strong> Use a previously valid code after it has expired.</li>
+<li><strong>Timing attack:</strong> Guess the code within the expiration window.</li>
+</ul>
+
+<h3>Brute-Force Resistance</h3>
+
+<table>
+<thead>
+<tr><th>Scenario</th><th>Attempts Needed</th><th>Time at 1/sec</th><th>With Rate Limiting</th></tr>
+</thead>
+<tbody>
+<tr><td>No rate limit</td><td>~537M (average)</td><td>~17 years</td><td>N/A</td></tr>
+<tr><td>3 attempts, 5-min lockout</td><td>3 per window</td><td>~18M windows = 170K years</td><td>Infeasible</td></tr>
+<tr><td>5 attempts, 10-min lockout</td><td>5 per window</td><td>~107M windows = 2M years</td><td>Infeasible</td></tr>
+</tbody>
+</table>
+
+<p>Even without rate limiting, brute-forcing a 6-digit code would take approximately 17 years at one attempt per second. With rate limiting (typically 3–5 attempts before a 5–10 minute lockout), the time required becomes millions of years. This is not a practical attack vector.</p>
+
+<h3>Why Password-Level Security Is Not Needed</h3>
+
+<p>Transfer codes are not passwords. They do not protect a persistent account or sensitive data. They are ephemeral matching identifiers that expire in minutes. The security requirements are:</p>
+
+<ul>
+<li><strong>Unpredictable:</strong> An attacker cannot guess the code before it expires. (Met: 1 billion possibilities + rate limiting)</li>
+<li><strong>Time-limited:</strong> The code is valid for a short window only. (Met: 5–10 minute expiration)</li>
+<li><strong>Single-use:</strong> Once used, the code should not be reusable. (Met: codes are invalidated after successful connection)</li>
+<li><strong>Non-correlated:</strong> Knowing one code does not help predict the next. (Met: cryptographically random generation)</li>
+</ul>
+
+<h2 id="timing">Timing: Expiration, Cleanup, and Replay Protection</h2>
+
+<p>Transfer codes are designed to be short-lived. This limits the window of vulnerability and ensures the signaling server does not accumulate stale state.</p>
+
+<h3>Expiration Timeline</h3>
+
+<pre>
+T+0s:     Sender creates room, code generated
+T+0-60s:  Code is shared via text/voice/QR
+T+60-300s: Receiver enters code, connection established
+T+300s:   Code expires (if not used)
+T+600s:   Room cleaned up, Durable Object evicted
+T+3600s:  Any remaining state purged
+
+Total lifecycle: 5-10 minutes
+</pre>
+
+<h3>Cleanup Process</h3>
+
+<p>When a code expires or the transfer completes, the signaling server cleans up:</p>
+
+<ol>
+<li><strong>WebSocket connections closed:</strong> Both peers' WebSocket connections are terminated.</li>
+<li><strong>Durable Object state cleared:</strong> SDP offers, ICE candidates, and room metadata are deleted.</li>
+<li><strong>Code removed from index:</strong> The code-to-room mapping is deleted from the key-value store.</li>
+<li><strong>Durable Object evicted:</strong> If no new requests arrive, the Durable Object is evicted from memory and storage.</li>
+</ol>
+
+<h3>Replay Protection</h3>
+
+<p>Once a code is used successfully, it cannot be reused. The code is invalidated immediately after the first successful connection. If the transfer fails and needs to restart, the sender must generate a new code.</p>
+
+<p>This prevents replay attacks where an attacker captures a valid code and tries to use it later. By the time the attacker tries, the code is already invalidated or expired.</p>
+
+<h2 id="vs-alternatives">Transfer Codes vs. Alternatives</h2>
+
+<p>Here is how transfer codes compare to other matching mechanisms used by file transfer tools:</p>
+
+<table>
+<thead>
+<tr><th>Method</th><th>Privacy</th><th>Usability</th><th>Security</th><th>Works Remotely</th></tr>
+</thead>
+<tbody>
+<tr><td>6-digit code</td><td>High (no data)</td><td>Excellent (share verbally)</td><td>Good (rate-limited, time-limited)</td><td>Yes</td></tr>
+<tr><td>UUID link</td><td>Medium (URL exposed)</td><td>Poor (hard to type/share)</td><td>Excellent (128-bit entropy)</td><td>Yes</td></tr>
+<tr><td>Email invite</td><td>Low (email stored)</td><td>Good (familiar)</td><td>Good (inbox access)</td><td>Yes</td></tr>
+<tr><td>QR code only</td><td>High (no data)</td><td>Poor (requires camera, proximity)</td><td>Good (visual channel)</td><td>No</td></tr>
+<tr><td>Bluetooth pairing</td><td>High</td><td>Poor (slow, limited range)</td><td>Good (device pairing)</td><td>No</td></tr>
+</tbody>
+</table>
+
+<p>Transfer codes win on the combination of privacy (no personal data), usability (shareable verbally), and flexibility (works remotely). They are the optimal matching mechanism for anonymous P2P file transfer.</p>
+
+<h2 id="failure-modes">Failure Modes and Edge Cases</h2>
+
+<p>A robust transfer code system must handle failure modes gracefully.</p>
+
+<h3>Code Already in Use</h3>
+
+<p>If the receiver enters a code while the sender is still generating it (a race condition), the server returns an error. The receiver retries after a short delay. This is handled by the signaling server's Durable Object, which processes requests serially.</p>
+
+<h3>Sender Goes Offline</h3>
+
+<p>If the sender closes their browser before the receiver enters the code, the Durable Object detects the disconnected WebSocket and returns a "sender offline" error to the receiver. The code remains valid for a short grace period in case the sender reconnects.</p>
+
+<h3>Code Expired</h3>
+
+<p>If the receiver takes too long to enter the code (e.g., they went to lunch), the code expires. The server returns a "code expired" error. The sender can generate a new code.</p>
+
+<h3>Multiple Receivers</h3>
+
+<p>If two people try to use the same code simultaneously, the server allows only one connection. The second receiver gets a "room full" error. This prevents unauthorized third parties from joining an active transfer.</p>
+
+<h3>Network Partition</h3>
+
+<p>If the signaling server becomes temporarily unreachable, both peers cannot complete the signaling phase. The server's Durable Object retains state during brief outages, so if connectivity is restored within the code's expiration window, the transfer can proceed.</p>
+
+<h2 id="implementation">Implementation: From Code to Connection</h2>
+
+<p>Here is the end-to-end implementation of transfer code matching, from code generation to P2P connection.</p>
+
+<h3>Sender Side</h3>
+
+<pre>
+// 1. Create a transfer session
+async function createTransferSession(file) {
+  const response = await fetch('/api/create-room', {
+    method: 'POST',
+    body: JSON.stringify({ fileSize: file.size, fileName: file.name })
+  });
+  const { code, roomId } = await response.json();
+  return { code, roomId };
+}
+
+// 2. Open WebSocket for signaling
+function connectSignaling(roomId) {
+  const ws = new WebSocket(`wss://signal.4share.work/room/${roomId}`);
+  ws.onmessage = (event) => handleSignalingMessage(JSON.parse(event.data));
+  return ws;
+}
+
+// 3. When receiver connects, start WebRTC negotiation
+function handleReceiverConnected() {
+  const pc = new RTCPeerConnection({ iceServers: [...] });
+  const dc = pc.createDataChannel('filetransfer', { ordered: true });
+  
+  pc.createOffer().then(offer => {
+    pc.setLocalDescription(offer);
+    signalingSocket.send(JSON.stringify({ type: 'offer', sdp: offer }));
+  });
+}
+</pre>
+
+<h3>Receiver Side</h3>
+
+<pre>
+// 1. Join a transfer session
+async function joinTransferSession(code) {
+  const response = await fetch('/api/join-room', {
+    method: 'POST',
+    body: JSON.stringify({ code })
+  });
+  
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.message); // "Code expired", "Room full", etc.
+  }
+  
+  const { roomId } = await response.json();
+  return roomId;
+}
+
+// 2. Connect to signaling and receive SDP offer
+function connectAndReceive(roomId) {
+  const ws = new WebSocket(`wss://signal.4share.work/room/${roomId}`);
+  ws.onmessage = (event) => {
+    const message = JSON.parse(event.data);
+    if (message.type === 'offer') {
+      // Process offer, create answer, start ICE
+      handleOffer(message.sdp);
+    }
+  };
+}
+</pre>
+
+<h3>The Complete Flow</h3>
+
+<pre>
+Sender                              Server                          Receiver
+  │                                   │                               │
+  │── POST /api/create-room ─────────►│                               │
+  │◄── { code: "A3K9M2" } ───────────│                               │
+  │                                   │                               │
+  │   (User shares "A3K9M2"          │                               │
+  │    via text message)              │                               │
+  │                                   │                               │
+  │                                   │◄── POST /api/join-room ───────│
+  │                                   │    { code: "A3K9M2" }         │
+  │                                   │                               │
+  │                                   │── Validate code               │
+  │                                   │── Check expiration            │
+  │                                   │── Check attempts              │
+  │                                   │── Return room ID              │
+  │                                   │                               │
+  │                                   │◄── WebSocket connect ─────────│
+  │                                   │                               │
+  │── WebSocket connect ─────────────►│                               │
+  │                                   │                               │
+  │◄── { type: "peer-joined" } ───────│──► { type: "peer-joined" } ──►│
+  │                                   │                               │
+  │── { type: "offer", sdp: ... } ───►│──► { type: "offer", ... } ──►│
+  │                                   │                               │
+  │◄── { type: "answer", sdp: ... } ──│◄── { type: "answer", ... } ──│
+  │                                   │                               │
+  │   ... ICE candidates exchanged ...│                               │
+  │                                   │                               │
+  │◄═══════════════ Direct P2P connection established ═════════════════►│
+  │                                   │                               │
+  │── File data (encrypted DTLS) ────►│         (server not involved) │
+  │                                   │                               │
+</pre>
+
+<h2 id="privacy">Privacy: What the Code Reveals (and What It Does Not)</h2>
+
+<p>Transfer codes are designed to reveal the minimum information necessary for matching.</p>
+
+<h3>What the Code Reveals</h3>
+
+<ul>
+<li><strong>That a transfer is in progress:</strong> The code's existence indicates someone is trying to send a file. But the code alone does not reveal who, what, or where.</li>
+<li><strong>Nothing about the file:</strong> The code does not encode file name, size, type, or content.</li>
+<li><strong>Nothing about the sender:</strong> The code does not reveal the sender's IP address, device, or identity.</li>
+<li><strong>Nothing about the receiver:</strong> The code does not reveal the receiver's IP address, device, or identity.</li>
+</ul>
+
+<h3>What the Signaling Server Sees</h3>
+
+<ul>
+<li><strong>WebSocket connections:</strong> The server sees IP addresses of connected peers (necessary for routing).</li>
+<li><strong>SDP/ICE messages:</strong> The server relays these but does not parse or store them.</li>
+<li><strong>Code-to-room mapping:</strong> The server maps codes to room instances for routing.</li>
+<li><strong>Nothing else:</strong> The server never sees file data, file metadata, or user accounts.</li>
+</ul>
+
+<h3>Data Minimization</h3>
+
+<p>The design follows the principle of data minimization. The signaling server stores only what is necessary for the shortest possible time:</p>
+
+<ul>
+<li>Code-to-room mapping: deleted after code expiration or use.</li>
+<li>WebSocket connections: closed after P2P connection is established.</li>
+<li>Durable Object state: evicted after room cleanup.</li>
+<li>No persistent logs of transfers, codes, or user activity.</li>
+</ul>
+
+<h2 id="ux">User Experience: Why Short Codes Win</h2>
+
+<p>The 6-digit code format is a deliberate UX decision that prioritizes human factors over theoretical security maximums.</p>
+
+<h3>Sharing a Code Verbally</h3>
+
+<pre>
+Sender: "Hey, the code is A... 3... K... 9... M... 2"
+Receiver: "Got it — A3K9M2"
+Sender: "That's right, go to 4share.work and enter it"
+</pre>
+
+<p>This conversation takes about 10 seconds. A UUID would take over a minute and would almost certainly be read incorrectly. A URL link is better but still requires copy-paste and can break in SMS (especially with URL shorteners).</p>
+
+<h3>QR Code Fallback</h3>
+
+<p>For nearby transfers, 4share also generates a QR code containing the transfer code. The receiver scans the QR code, which automatically enters the code. This combines the ease of QR scanning with the flexibility of code-based matching.</p>
+
+<h3>Mobile Keyboard Considerations</h3>
+
+<p>The character set is chosen to work well on mobile keyboards:</p>
+
+<ul>
+<li><strong>Digits 2–9:</strong> On the main keyboard, easily accessible.</li>
+<li><strong>Uppercase letters:</strong> Shift key required, but familiar from CAPTCHAs and verification codes.</li>
+<li><strong>No lowercase:</strong> Avoids confusion between cases.</li>
+<li><strong>No special characters:</strong> Avoids keyboard switching on mobile devices.</li>
+</ul>
+
+<p>The result is a code that can be typed in under 10 seconds on any mobile device, shared verbally in under 15 seconds, and scanned from a QR code in under 2 seconds.</p>
+
+<div class="cta-box"><h3>Try 4share Free</h3><p>Transfer files instantly with no ads, no limits, and no signup.</p><a href="https://www.4share.work">Open 4share →</a></div>
+
+<section class="faq"><h2>Frequently Asked Questions</h2>
+
+<details>
+<summary>What is a 6-digit transfer code?</summary>
+<p>A 6-digit transfer code is a short, randomly generated identifier that links a sender and receiver for a P2P file transfer. The sender generates the code, shares it with the receiver (via text, voice, or QR code), and the receiver enters it to connect directly to the sender's device.</p>
+</details>
+
+<details>
+<summary>How secure is a 6-digit code?</summary>
+<p>A 6-digit alphanumeric code has millions of possible combinations. Combined with short expiration times (typically 5–10 minutes) and rate limiting on connection attempts, brute-force attacks are infeasible. An attacker would need to guess the correct code, be online within the expiration window, and connect to the correct signaling room.</p>
+</details>
+
+<details>
+<summary>Why not use a longer code like a UUID?</summary>
+<p>Longer codes are more secure but harder for humans to share. A 6-digit code can be read over the phone, typed quickly, or scanned from a QR code. UUIDs (36 characters) are error-prone to type and impossible to read aloud. The 6-digit format balances security with usability.</p>
+</details>
+
+<details>
+<summary>How is the code generated?</summary>
+<p>The code is generated using a cryptographically secure random number generator (CSPRNG). Each character is selected independently from a set of allowed characters (digits and/or letters), ensuring uniform distribution and unpredictability.</p>
+</details>
+
+<details>
+<summary>How long does a transfer code last?</summary>
+<p>Transfer codes typically expire after 5–10 minutes. After expiration, the code can no longer be used to connect. The sender can generate a new code if needed. This short window limits the time an attacker has to guess or intercept the code.</p>
+</details>
+
+<details>
+<summary>Can someone guess my transfer code?</summary>
+<p>Guessing a 6-digit code is extremely unlikely. With rate limiting (typically 3–5 failed attempts before temporary lockout), an attacker would need thousands of years to brute-force all combinations. The code also expires quickly, further reducing the attack window.</p>
+</details>
+
+<details>
+<summary>Can transfer codes be intercepted?</summary>
+<p>The code itself is not encrypted — it is shared via text, voice, or QR code. However, knowing the code only allows the attacker to attempt a connection. The actual file data is encrypted end-to-end via DTLS, so even a successful connection does not expose file contents without the encryption keys.</p>
+</details>
+
+<details>
+<summary>Why not use email or phone number for matching?</summary>
+<p>Using email or phone number requires account creation and personal data collection. Transfer codes provide anonymous matching — no personal information is needed or stored. This is faster (no signup), more private (no data collection), and works across platforms without accounts.</p>
+</details>
+
+</section>
+
+<section class="related"><h3>Related Articles</h3><div class="related-grid">
+<a href="/blog/cloudflare-workers-realtime.html" class="related-card"><h4>How Cloudflare Workers Handle Millions of Signaling Requests</h4><p>The serverless infrastructure behind WebRTC signaling at scale.</p></a>
+<a href="/blog/webrtc-file-transfer.html" class="related-card"><h4>How WebRTC Enables Direct Browser-to-Browser File Transfer</h4><p>The complete WebRTC architecture for P2P file sharing.</p></a>
+<a href="/blog/file-transfer-privacy.html" class="related-card"><h4>File Transfer Privacy: What You Need to Know</h4><p>How P2P transfer protects your data better than cloud services.</p></a>
+</div></section>
+</article>
+</main>
+<footer class="site-footer"><div class="container"><p>© 2026 4share — P2P File Transfer</p><nav><a href="/blog/">Blog</a><a href="/about/">About</a><a href="/privacy/">Privacy</a></nav></div></footer>
+</body>
+</html>

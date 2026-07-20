@@ -1,0 +1,8 @@
+name = "4share-proxy"
+main = "src/proxy.ts"
+compatibility_date = "2024-12-01"
+
+routes = [
+  { pattern = "4share.work/*", zone_name = "4share.work" },
+  { pattern = "4share.work", zone_name = "4share.work" }
+]

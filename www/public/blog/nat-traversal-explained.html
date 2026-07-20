@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Understanding NAT Traversal and Why P2P Connections Work | 4share</title>
+<meta name="description" content="NAT traversal explained: how ICE, STUN, and TURN let WebRTC peers connect through firewalls and NAT for browser-to-browser file transfer.">
+<link rel="stylesheet" href="/blog/style.css">
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "Article", "headline": "Understanding NAT Traversal and Why P2P Connections Work", "author": {"@type": "Organization", "name": "4share"}, "datePublished": "2026-01-20", "dateModified": "2026-01-20", "description": "NAT traversal explained: how ICE, STUN, and TURN let WebRTC peers connect through firewalls and NAT for browser-to-browser file transfer."}
+</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "What is NAT and why does it block P2P connections?", "acceptedAnswer": {"@type": "Answer", "text": "NAT (Network Address Translation) is a technique used by routers to share a single public IP address among multiple private devices. NAT translates private IP addresses to the public address, and it blocks unsolicited incoming connections, which prevents P2P peers from reaching each other directly."}}, {"@type": "Question", "name": "What is NAT traversal?", "acceptedAnswer": {"@type": "Answer", "text": "NAT traversal is the process of establishing a direct connection between two peers that are both behind NAT devices. It uses techniques like STUN hole-punching, TURN relaying, and ICE candidate gathering to find a working path between the two devices."}}, {"@type": "Question", "name": "What is the difference between STUN and TURN?", "acceptedAnswer": {"@type": "Answer", "text": "STUN discovers your public IP address so peers can connect directly. TURN acts as a relay server when direct connection fails — data passes through the TURN server instead of going directly between peers."}}, {"type": "Question", "name": "How does ICE work in WebRTC?", "acceptedAnswer": {"@type": "Answer", "text": "ICE (Interactive Connectivity Establishment) gathers all possible connection paths between two peers — local, STUN-discovered, and TURN relay — and tries them in order. The first path that works is used for the connection."}}, {"@type": "Question", "name": "What types of NAT exist and which are hardest to traverse?", "acceptedAnswer": {"@type": "Answer", "text": "The four main types are Full Cone, Restricted Cone, Port Restricted Cone, and Symmetric NAT. Symmetric NAT is the hardest to traverse because it assigns a different public port for each destination, making hole-punching unreliable."}}, {"@type": "Question", "name": "Why do some P2P connections fail?", "acceptedAnswer": {"@type": "Answer", "text": "P2P connections can fail when both peers are behind symmetric NATs, when UDP is blocked by firewalls, or when corporate security policies restrict peer-to-peer traffic. TURN relay fallback handles these cases."}}, {"@type": "Question", "name": "Can NAT traversal work on mobile networks?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Mobile networks use carrier-grade NAT (CGNAT), which is typically port-restricted cone NAT. WebRTC handles this using STUN and, if needed, TURN relay fallback."}}, {"@type": "Question", "name": "Does 4share use NAT traversal?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. 4share uses WebRTC with ICE for NAT traversal. It uses STUN servers to discover public addresses and falls back to TURN relay when direct connection is not possible."}}]}
+</script>
+</head>
+<body>
+<header class="site-header"><div class="container"><a href="/" class="logo"><span>4</span>share</a><nav><a href="/blog/">Blog</a><a href="/tutorial/">Tutorial</a><a href="/transfer/large-files/">Send Large Files</a><a href="/about/">About</a></nav></div></header>
+<main class="container">
+<article>
+<div class="breadcrumb"><a href="/blog/">Blog</a> &gt; <a href="/blog/category/deep-dives/">Deep Dives</a></div>
+<h1>Understanding NAT Traversal and Why P2P Connections Work</h1>
+<div class="meta"><span>Published: Jan 2026</span><span>Category: Deep Dives</span><span>10 min read</span></div>
+<div class="toc"><h3>Table of Contents</h3><ol>
+<li><a href="#what-is-nat">What Is NAT and Why Does It Exist?</a></li>
+<li><a href="#nat-types">Types of NAT: Full Cone, Restricted Cone, Port Restricted, and Symmetric</a></li>
+<li><a href="#the-problem">The Problem: Why NAT Breaks P2P Connections</a></li>
+<li><a href="#hole-punching">NAT Hole-Punching: The Core Technique</a></li>
+<li><a href="#stun">STUN: Discovering Your Public Address</a></li>
+<li><a href="#turn">TURN: The Relay Fallback</a></li>
+<li><a href="#ice">ICE: Putting It All Together</a></li>
+<li><a href="#symmetric-nat">The Symmetric NAT Challenge</a></li>
+<li><a href="#carrier-grade">Carrier-Grade NAT (CGNAT) on Mobile Networks</a></li>
+<li><a href="#success-rates">Real-World NAT Traversal Success Rates</a></li>
+</ol></div>
+
+<p>NAT traversal is the technique that makes direct browser-to-browser file transfer possible even when both devices sit behind firewalls and routers. Tools like <a href="https://www.4share.work">4share</a> use NAT traversal protocols — STUN, TURN, and ICE — to discover public network addresses and punch holes through NAT devices, establishing direct encrypted connections between two browsers without routing file data through any server. Without NAT traversal, most peer-to-peer connections would fail before they could even begin.</p>
+
+<p>This article explains the different types of NAT, why they block P2P connections, and exactly how the protocols used by WebRTC overcome these obstacles to enable direct file transfer.</p>
+
+<h2 id="what-is-nat">What Is NAT and Why Does It Exist?</h2>
+
+<p>NAT stands for Network Address Translation. It is a technique used by routers and firewalls to translate between private (internal) IP addresses and public (external) IP addresses. NAT exists because of a fundamental limitation of the internet: there are not enough public IPv4 addresses for every device.</p>
+
+<h3>How NAT Works</h3>
+
+<p>When your device connects to a router, the router assigns it a private IP address (like 192.168.1.100) that is only valid within your local network. When your device needs to reach the internet, the router translates the private address to its own public IP address. To the outside world, all devices on your network appear to share a single IP address.</p>
+
+<p><strong>NAT Diagram (text representation):</strong></p>
+
+<pre>
+  Private Network                    Public Internet
+  ┌──────────────┐
+  │ Device A     │──┐
+  │ 192.168.1.10 │  │
+  └──────────────┘  │    ┌─────────────┐     ┌──────────────┐
+                     ├───►│   Router    │────►│   Internet   │
+  ┌──────────────┐  │    │  NAT Layer  │     │              │
+  │ Device B     │──┘    │ 203.0.113.5 │     │              │
+  │ 192.168.1.20 │       └─────────────┘     └──────────────┘
+  └──────────────┘
+  
+  Router maps: 192.168.1.10:54321 ──► 203.0.113.5:40001
+               192.168.1.20:54321 ──► 203.0.113.5:40002
+</pre>
+
+<p>The router maintains a translation table that maps each outgoing connection to a unique port on its public IP. When responses arrive, the router consults this table and forwards them to the correct internal device.</p>
+
+<h3>Why NAT Is a Problem for P2P</h3>
+
+<p>NAT was designed for a client-server model: your device initiates outbound connections to servers, and the router handles the responses. This works perfectly for web browsing, email, and streaming. But P2P connections require something different — one peer needs to initiate a connection to another peer, but the other peer's address is a private IP that is unreachable from the internet.</p>
+
+<p>When Device A behind NAT tries to connect to Device B behind a different NAT, the connection attempt arrives at Device B's router. But Device B's router has no mapping for this incoming connection — it was never initiated from inside the network. The router drops the packet. The connection fails.</p>
+
+<h2 id="nat-types">Types of NAT: Full Cone, Restricted Cone, Port Restricted, and Symmetric</h2>
+
+<p>Not all NAT devices behave the same way. The type of NAT determines how restrictive it is and, consequently, how difficult it is to establish a P2P connection through it.</p>
+
+<h3>Full Cone NAT</h3>
+
+<p>Full Cone NAT is the least restrictive type. Once an internal device sends a packet to an external address, the NAT creates a mapping. Any external device can then send packets back to that mapping, and they will be forwarded to the internal device.</p>
+
+<pre>
+Internal device sends to ANY external address
+  ──► NAT creates mapping: internal:port ──► external:port
+  ──► ANY external device can send to external:port
+  ──► NAT forwards to internal device
+</pre>
+
+<p>Full Cone NAT is P2P-friendly. Once one peer sends a packet outward (creating a mapping), the other peer can send directly to that mapping. No special traversal techniques are needed beyond discovering the public address.</p>
+
+<h3>Restricted Cone NAT</h3>
+
+<p>Restricted Cone NAT is slightly more restrictive. After the internal device sends a packet outward, the NAT creates a mapping, but only packets from the specific IP address that received the initial packet are forwarded. Packets from other IP addresses are dropped.</p>
+
+<pre>
+Internal device sends to External Device X
+  ──► NAT creates mapping
+  ──► Only External Device X can send back
+  ──► Packets from External Device Y are DROPPED
+</pre>
+
+<p>For P2P, this means the second peer must first receive a packet from the first peer before it can send to the first peer. This requires careful choreography during hole-punching.</p>
+
+<h3>Port Restricted Cone NAT</h3>
+
+<p>Port Restricted Cone NAT adds another layer: not only must the incoming packet come from the correct IP address, it must also come from the correct port. This is the most common type of NAT found in home routers.</p>
+
+<pre>
+Internal device sends to External IP:Port
+  ──► NAT creates mapping for that specific IP AND port
+  ──► Only packets from that exact IP:Port are forwarded
+  ──► Packets from same IP but different port are DROPPED
+</pre>
+
+<p>Port Restricted Cone NAT makes hole-punching trickier because both peers must send their initial packets to each other's exact public address and port simultaneously.</p>
+
+<h3>Symmetric NAT</h3>
+
+<p>Symmetric NAT is the most restrictive. Unlike the other types, it creates a different mapping for each destination. If Device A sends a packet to Server X and Server Y, the NAT assigns different external ports for each destination.</p>
+
+<pre>
+Internal device sends to Server X: port 80
+  ──► NAT assigns external port 40001
+
+Internal device sends to Server Y: port 80
+  ──► NAT assigns external port 40002 (DIFFERENT port!)
+</pre>
+
+<p>This makes P2P connections extremely difficult. When Device A sends a packet through NAT to Device B, the NAT assigns a port. But Device B does not know which port was assigned (it is different from what the STUN server reported), so it cannot send directly back to Device A.</p>
+
+<h2 id="the-problem">The Problem: Why NAT Breaks P2P Connections</h2>
+
+<p>The fundamental problem is this: NAT was designed to allow outbound connections but block unsolicited inbound connections. In a client-server model, this is fine — the client initiates the connection, and the NAT allows the response back in. But in a P2P model, both devices need to initiate connections to each other, and neither can reach the other's private address.</p>
+
+<p>Consider two devices behind NAT:</p>
+
+<pre>
+Device A (192.168.1.10)          Device B (10.0.0.15)
+       │                                │
+       ▼                                ▼
+  Router A                         Router B
+  203.0.113.5                     198.51.100.3
+       │                                │
+       └────────── Internet ────────────┘
+
+Device A wants to connect to Device B.
+But Device B's private address (10.0.0.15) is unreachable from Device A's network.
+And Device A's private address (192.168.1.10) is unreachable from Device B's network.
+</pre>
+
+<p>Device A cannot send a packet directly to Device B because 10.0.0.15 is a private address that does not exist on the public internet. Device A can only send packets to public addresses. Similarly, Device B cannot reach Device A's private address.</p>
+
+<p>Even if both devices know each other's public addresses (obtained via STUN), the routers may still block the incoming connections because there is no existing mapping for them.</p>
+
+<h2 id="hole-punching">NAT Hole-Punching: The Core Technique</h2>
+
+<p>NAT hole-punching is the technique that makes most P2P connections possible. The basic idea is simple: both peers send outgoing packets to each other simultaneously (or near-simultaneously), creating NAT mappings that allow the other peer's packets to pass through.</p>
+
+<h3>How Hole-Punching Works</h3>
+
+<ol>
+<li><strong>Peer A sends a packet to Peer B's public address.</strong> This creates a mapping on Router A: internal:port → external:port. Router A now knows that packets from Peer B's public address should be forwarded to this mapping.</li>
+<li><strong>Peer B sends a packet to Peer A's public address.</strong> This creates a mapping on Router B.</li>
+<li><strong>The packets cross in transit.</strong> When Peer A's packet arrives at Router B, Router B checks its mapping table. If Peer B has already sent a packet to Peer A's address (creating the mapping), Router B forwards the packet to Peer B. The same happens in reverse at Router A.</li>
+<li><strong>Connection established.</strong> Both routers now have mappings for the other peer's packets. Direct communication can proceed.</li>
+</ol>
+
+<p><strong>Hole-Punching Diagram (text representation):</strong></p>
+
+<pre>
+Time 1:  Device A ──► Router A ──► Device B's public address
+         (creates mapping on Router A)
+
+Time 2:  Device B ──► Router B ──► Device A's public address
+         (creates mapping on Router B)
+
+Time 3:  Router A checks mapping ──► forwards to Device A ✓
+         Router B checks mapping ──► forwards to Device B ✓
+
+Result:  Device A ◄══════════════════════════► Device B
+         Direct, encrypted P2P connection established!
+</pre>
+
+<h3>Why Timing Matters</h3>
+
+<p>The timing of the hole-punching packets matters because NAT mappings are not permanent. They typically expire after a few minutes of inactivity. Both peers must send their initial packets close together (within a few seconds) so that both NAT mappings are active when the other peer's packet arrives.</p>
+
+<p>If there is a large delay — for example, Peer A sends its packet, but Peer B takes 30 seconds to respond — Router A's mapping may have expired by the time Peer B's packet arrives. The packet is dropped, and the hole-punching attempt fails.</p>
+
+<p>This is why WebRTC's ICE agent sends multiple candidates and tries them in rapid succession. The more candidates and the faster the attempts, the higher the chance that at least one pair of NAT mappings aligns correctly.</p>
+
+<h2 id="stun">STUN: Discovering Your Public Address</h2>
+
+<p>Before hole-punching can work, each peer must know its own public IP address and port mapping. This is where STUN comes in.</p>
+
+<h3>What STUN Does</h3>
+
+<p>STUN (Session Traversal Utilities for NAT) is a protocol defined in RFC 8489. A STUN server is a lightweight server that runs on the public internet. When your browser sends a STUN binding request, the server responds with the source address it saw — which is your public IP address and port mapping.</p>
+
+<pre>
+Your Device (192.168.1.10:54321)
+       │
+       │ STUN Binding Request
+       ▼
+STUN Server (public internet)
+       │
+       │ STUN Binding Response:
+       │ "I received your packet from 203.0.113.5:40001"
+       ▼
+Your Device learns: "My public address is 203.0.113.5:40001"
+</pre>
+
+<p>The STUN server does not relay data. It simply reports back the address from which the request arrived. This is enough for the peer to construct a public address that the other peer can try to connect to.</p>
+
+<h3>STUN Limitations</h3>
+
+<p>STUN works well for most NAT types, but it has limitations:</p>
+
+<ul>
+<li><strong>Symmetric NAT:</strong> When Device A contacts the STUN server, it learns one port mapping. But when Device A tries to send to Device B, the NAT assigns a different port. The port learned from STUN is not the port that Device B will see.</li>
+<li><strong>Port-restricted NAT with strict behavior:</strong> Some NATs only allow traffic from the exact IP:port that the initial packet was sent to. STUN gives you the mapping, but the other peer must also send a packet first before the mapping accepts incoming data.</li>
+<li><strong>UDP blocking:</strong> Some corporate firewalls block all UDP traffic. Since STUN and hole-punching use UDP, they cannot function when UDP is blocked.</li>
+</ul>
+
+<p>For these cases, TURN is needed as a fallback.</p>
+
+<h2 id="turn">TURN: The Relay Fallback</h2>
+
+<p>TURN (Traversal Using Relays around NAT) is a protocol that provides a relay server for cases where direct P2P connection is impossible. When STUN and hole-punching fail, TURN steps in to relay all data between the two peers.</p>
+
+<h3>How TURN Works</h3>
+
+<p>A TURN server is a public server that allocates a relay address for a client. The client sends data to the relay address, and the TURN server forwards it to the destination. Both peers connect to the same TURN server, which shuttles data between them.</p>
+
+<pre>
+Device A                    TURN Server                   Device B
+    │                           │                            │
+    │──── Allocate Relay ───────►│                            │
+    │◄─── Relay Address ────────│                            │
+    │                           │                            │
+    │──── Send Data ────────────►│──── Forward Data ─────────►│
+    │◄─── Receive Data ─────────│◄─── Receive Data ──────────│
+    │                           │                            │
+</pre>
+
+<p>TURN adds latency (data must travel to the relay and then to the destination, instead of going directly) and costs bandwidth (the relay server must handle all data for the connection). But it ensures connectivity even in the most restrictive network environments.</p>
+
+<h3>When TURN Is Needed</h3>
+
+<ul>
+<li><strong>Both peers behind symmetric NAT:</strong> Hole-punching cannot work because the port assignments are unpredictable.</li>
+<li><strong>UDP blocked by firewall:</strong> TURN can operate over TCP (port 443), which is rarely blocked.</li>
+<li><strong>Corporate security policies:</strong> Some organizations block all P2P traffic. TURN relays through port 443, which is typically allowed.</li>
+<li><strong>Mobile carrier networks:</strong> Carrier-grade NAT often behaves like symmetric NAT, making direct connection unreliable.</li>
+</ul>
+
+<h3>TURN Performance</h3>
+
+<p>TURN relay introduces overhead because data takes an indirect path. In practice, TURN-relayed connections are about 50–70% as fast as direct connections, depending on the TURN server's location and load. For file transfers, this means longer transfer times, but the transfer still works.</p>
+
+<h2 id="ice">ICE: Putting It All Together</h2>
+
+<p>ICE (Interactive Connectivity Establishment) is the framework that orchestrates NAT traversal in WebRTC. It combines STUN, TURN, and hole-punching into a systematic process for finding the best available connection path.</p>
+
+<h3>The ICE Process</h3>
+
+<ol>
+<li><strong>Gather candidates:</strong> Each peer collects all possible connection addresses:
+  <ul>
+  <li>Host candidates: local network interfaces (private IPs)</li>
+  <li>Server-reflexive candidates: public addresses discovered via STUN</li>
+  <li>Relay candidates: relay addresses allocated via TURN</li>
+  </ul>
+</li>
+<li><strong>Exchange candidates:</strong> Both peers send their candidate lists to each other through the signaling server.</li>
+<li><strong>Pair candidates:</strong> ICE creates pairs of candidates (one from each peer) and sorts them by priority (local first, then STUN, then TURN).</li>
+<li><strong>Check pairs:</strong> ICE sends connectivity checks (STUN binding requests) on each pair to see if the path works.</li>
+<li><strong>Select best pair:</strong> The first pair that successfully passes connectivity checks is selected. ICE nominates it as the active connection.</li>
+<li><strong>Establish connection:</strong> The DTLS handshake runs over the selected pair, and the data channel opens for file transfer.</li>
+</ol>
+
+<p><strong>ICE Candidate Priority:</strong></p>
+
+<pre>
+Priority order (highest to lowest):
+
+1. Host candidate ◄── Direct LAN connection (fastest, most reliable)
+2. Server-reflexive (STUN) ◄── NAT traversal (works for most NAT types)
+3. Relay (TURN) ◄── Fallback relay (slowest, but always works)
+</pre>
+
+<p>ICE tries candidates from highest to lowest priority. If a host candidate works (both peers on the same LAN), it is used — no NAT traversal needed. If not, ICE tries STUN candidates. Only if STUN fails does ICE fall back to TURN.</p>
+
+<h2 id="symmetric-nat">The Symmetric NAT Challenge</h2>
+
+<p>Symmetric NAT is the hardest NAT type for P2P traversal. Here is why it is so problematic:</p>
+
+<h3>The Problem with Symmetric NAT</h3>
+
+<p>When Device A behind symmetric NAT sends a packet to STUN server X, the NAT assigns port 40001. When Device A sends a packet to STUN server Y, the NAT assigns port 40002. Each destination gets a different port.</p>
+
+<p>For hole-punching to work, Device B needs to send a packet to the exact port that Device A's NAT assigned for the path to Device B. But neither Device A nor Device B knows this port in advance — it is assigned by the NAT only when the first packet is sent to that specific destination.</p>
+
+<pre>
+Device A ──► STUN Server X ──► NAT assigns port 40001
+Device A ──► Device B ────────► NAT assigns port 40003 (DIFFERENT!)
+Device B ──► Device A (port 40001) ──► NAT DROPS (wrong port!)
+</pre>
+
+<h3>Solutions for Symmetric NAT</h3>
+
+<p>When both peers are behind symmetric NAT, the only reliable solution is TURN relay. However, there are also some advanced techniques:</p>
+
+<ul>
+<li><strong>Port prediction:</strong> Some symmetric NATs assign ports sequentially (40001, 40002, 40003...). If the peer can predict the next port assignment, hole-punching may succeed. However, this is unreliable and does not work with all NAT implementations.</li>
+<li><strong>UPnP/PCP:</strong> Some routers support UPnP or PCP (Port Control Protocol), which allows applications to create port mappings automatically. If both routers support this, direct connection is possible regardless of NAT type. However, many routers disable UPnP for security reasons.</li>
+<li><strong>TURN relay:</strong> The reliable fallback. Always works, but adds latency and bandwidth cost.</li>
+</ul>
+
+<h2 id="carrier-grade">Carrier-Grade NAT (CGNAT) on Mobile Networks</h2>
+
+<p>Mobile networks use a special form of NAT called Carrier-Grade NAT (CGNAT) or Large-Scale NAT (LSN). This is essentially symmetric NAT deployed at the carrier level, where thousands of mobile devices share a pool of public IP addresses.</p>
+
+<h3>How CGNAT Affects P2P</h3>
+
+<p>When you use mobile data, your phone's traffic goes through the carrier's CGNAT gateway. The carrier assigns a public port for each connection, but this port may change frequently and unpredictably. Some carriers reassign ports every few minutes, which can break existing P2P connections.</p>
+
+<p>However, most modern mobile carriers use a form of port-restricted cone NAT rather than strict symmetric NAT. This means STUN-based hole-punching works for the majority of mobile connections. WebRTC's ICE agent handles this automatically by probing multiple candidates quickly.</p>
+
+<h3>WiFi vs. Mobile for P2P</h3>
+
+<ul>
+<li><strong>WiFi (home network):</strong> Usually port-restricted cone NAT. STUN works well. High success rate for direct connection.</li>
+<li><strong>Mobile data:</strong> Usually CGNAT (port-restricted or symmetric). STUN works in most cases. TURN fallback more common than on WiFi.</li>
+<li><strong>Corporate WiFi:</strong> Often strict firewall with symmetric NAT. TURN relay is frequently needed.</li>
+<li><strong>Public WiFi (cafe, airport):</strong> Usually port-restricted cone NAT. STUN works, but bandwidth may be limited.</li>
+</ul>
+
+<h2 id="success-rates">Real-World NAT Traversal Success Rates</h2>
+
+<p>Based on data from WebRTC deployments and studies, here are typical NAT traversal success rates:</p>
+
+<table>
+<thead>
+<tr><th>Scenario</th><th>Direct Connection Success Rate</th><th>TURN Needed</th></tr>
+</thead>
+<tbody>
+<tr><td>Both peers on same LAN</td><td>~99%</td><td>Almost never</td></tr>
+<tr><td>Home WiFi vs. Home WiFi</td><td>~85–90%</td><td>10–15%</td></tr>
+<tr><td>Home WiFi vs. Mobile</td><td>~80–85%</td><td>15–20%</td></tr>
+<tr><td>Mobile vs. Mobile</td><td>~75–85%</td><td>15–25%</td></tr>
+<tr><td>Corporate vs. Home</td><td>~60–75%</td><td>25–40%</td></tr>
+<tr><td>Corporate vs. Corporate</td><td>~40–60%</td><td>40–60%</td></tr>
+</tbody>
+</table>
+
+<p>These numbers show that NAT traversal succeeds in the majority of cases, but a meaningful percentage of connections require TURN relay. This is why production P2P applications must include TURN infrastructure — it is not optional for reliable connectivity.</p>
+
+<h3>Factors That Improve Success Rates</h3>
+
+<ul>
+<li><strong>Multiple STUN servers:</strong> Using STUN servers in different regions increases the chance of discovering a usable public address.</li>
+<li><strong>IPv6 support:</strong> IPv6 eliminates NAT entirely. When both peers support IPv6, direct connection is almost always possible. WebRTC can attempt IPv6 connections alongside IPv4.</li>
+<li><strong>UPnP/PCP:</strong> If the router supports automatic port mapping, the application can create a mapping that allows incoming connections, effectively turning a cone NAT into a full cone NAT.</li>
+<li><strong>TCP fallback:</strong> Some restrictive networks block UDP but allow TCP. WebRTC can fall back to TCP-based transport (TURN over TCP) for these environments.</li>
+</ul>
+
+<h3>How 4share Handles NAT Traversal</h3>
+
+<p><a href="https://www.4share.work">4share</a> uses WebRTC with a comprehensive ICE configuration that maximizes connection success rates. The signaling infrastructure uses Cloudflare's global network of STUN and TURN servers, ensuring low-latency candidate gathering and reliable relay fallback. When a direct connection is possible, 4share finds it. When it is not, the TURN relay provides a seamless fallback that users never notice.</p>
+
+<p>The entire process is automatic. Users do not need to configure anything, understand NAT types, or worry about firewall settings. They select a file, share the code, and the connection establishes itself.</p>
+
+<div class="cta-box"><h3>Try 4share Free</h3><p>Transfer files instantly with no ads, no limits, and no signup.</p><a href="https://www.4share.work">Open 4share →</a></div>
+
+<section class="faq"><h2>Frequently Asked Questions</h2>
+
+<details>
+<summary>What is NAT and why does it block P2P connections?</summary>
+<p>NAT (Network Address Translation) is a technique used by routers to share a single public IP address among multiple private devices. NAT translates private IP addresses to the public address, and it blocks unsolicited incoming connections, which prevents P2P peers from reaching each other directly.</p>
+</details>
+
+<details>
+<summary>What is NAT traversal?</summary>
+<p>NAT traversal is the process of establishing a direct connection between two peers that are both behind NAT devices. It uses techniques like STUN hole-punching, TURN relaying, and ICE candidate gathering to find a working path between the two devices.</p>
+</details>
+
+<details>
+<summary>What is the difference between STUN and TURN?</summary>
+<p>STUN discovers your public IP address so peers can connect directly. TURN acts as a relay server when direct connection fails — data passes through the TURN server instead of going directly between peers.</p>
+</details>
+
+<details>
+<summary>How does ICE work in WebRTC?</summary>
+<p>ICE (Interactive Connectivity Establishment) gathers all possible connection paths between two peers — local, STUN-discovered, and TURN relay — and tries them in order. The first path that works is used for the connection.</p>
+</details>
+
+<details>
+<summary>What types of NAT exist and which are hardest to traverse?</summary>
+<p>The four main types are Full Cone, Restricted Cone, Port Restricted Cone, and Symmetric NAT. Symmetric NAT is the hardest to traverse because it assigns a different public port for each destination, making hole-punching unreliable.</p>
+</details>
+
+<details>
+<summary>Why do some P2P connections fail?</summary>
+<p>P2P connections can fail when both peers are behind symmetric NATs, when UDP is blocked by firewalls, or when corporate security policies restrict peer-to-peer traffic. TURN relay fallback handles these cases.</p>
+</details>
+
+<details>
+<summary>Can NAT traversal work on mobile networks?</summary>
+<p>Yes. Mobile networks use carrier-grade NAT (CGNAT), which is typically port-restricted cone NAT. WebRTC handles this using STUN and, if needed, TURN relay fallback.</p>
+</details>
+
+<details>
+<summary>Does 4share use NAT traversal?</summary>
+<p>Yes. 4share uses WebRTC with ICE for NAT traversal. It uses STUN servers to discover public addresses and falls back to TURN relay when direct connection is not possible.</p>
+</details>
+
+</section>
+
+<section class="related"><h3>Related Articles</h3><div class="related-grid">
+<a href="/blog/webrtc-file-transfer.html" class="related-card"><h4>How WebRTC Enables Direct Browser-to-Browser File Transfer</h4><p>The complete WebRTC architecture for P2P file sharing.</p></a>
+<a href="/blog/cloudflare-workers-realtime.html" class="related-card"><h4>How Cloudflare Workers Handle Millions of Signaling Requests</h4><p>Serverless infrastructure for WebRTC signaling at scale.</p></a>
+<a href="/blog/webtransport-vs-webrtc.html" class="related-card"><h4>WebTransport vs WebRTC: The Future of Browser File Transfer</h4><p>Comparing next-generation browser transport protocols.</p></a>
+</div></section>
+</article>
+</main>
+<footer class="site-footer"><div class="container"><p>© 2026 4share — P2P File Transfer</p><nav><a href="/blog/">Blog</a><a href="/about/">About</a><a href="/privacy/">Privacy</a></nav></div></footer>
+</body>
+</html>

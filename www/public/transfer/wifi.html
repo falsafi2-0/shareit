@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WiFi File Transfer | 4share</title>
+  <meta name="description" content="WiFi file transfer between any two devices. Fast, direct, and free. Send files over WiFi without uploading to any server. Works on all devices.">
+  <link rel="stylesheet" href="/blog/style.css">
+</head>
+<body>
+  <header class="site-header">
+    <div class="container">
+      <a href="/" class="logo"><span>4</span>share</a>
+      <nav>
+        <a href="/blog/">Blog</a>
+        <a href="/tutorial/">Tutorial</a>
+        <a href="/transfer/large-files/">Send Large Files</a>
+        <a href="/about/">About</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero">
+      <h1>WiFi File Transfer</h1>
+      <p class="subtitle">Send files over WiFi directly between devices. No cables, no servers, no uploads. Just fast, direct WiFi file transfer.</p>
+      <a href="https://www.4share.work" class="cta-button">Transfer Over WiFi</a>
+    </section>
+
+    <section>
+      <h2>Why WiFi File Transfer Makes Sense</h2>
+      <p>WiFi is the most common way devices connect to the internet and to each other. Every home, office, school, and coffee shop has WiFi. Your phone, laptop, tablet, and desktop are almost certainly connected to a WiFi network right now. It makes sense to use this existing connectivity for file transfer instead of routing files through distant servers.</p>
+      <p>When you use a cloud-based file sharing service, your files take an indirect path. They travel from your device to the service's server (often in a different city or country), sit on that server for a while, and then travel from the server to the recipient's device. This detour adds latency, reduces speed, and introduces security concerns.</p>
+      <p>WiFi file transfer with 4share cuts out the middleman. When both devices are on the same WiFi network, the files can travel at WiFi speeds — often much faster than any internet connection. Even when the devices are on different networks, the direct P2P connection is faster than going through a server.</p>
+    </section>
+
+    <section>
+      <h2>How 4share Uses WiFi for File Transfer</h2>
+      <p>4share uses WebRTC to create direct connections between devices. When both devices are connected to the same WiFi network, WebRTC can establish a local connection that bypasses the internet entirely. This means the file transfer happens at the speed of your WiFi network, not the speed of your internet connection.</p>
+      <p>For example, if you are sending a file from your laptop to your phone, and both are connected to your home WiFi, the transfer happens entirely within your local network. The file does not leave your house. It goes from one device to another through your WiFi router, at the full speed of your WiFi connection.</p>
+      <p>When devices are on different networks, 4share uses the internet to establish the connection, but the data still flows directly between the two devices. The only difference is that the data has to traverse the internet rather than staying on the local network.</p>
+    </section>
+
+    <section>
+      <h2>WiFi File Transfer Scenarios</h2>
+
+      <h3>Same Network: Fastest Transfers</h3>
+      <p>When both devices are on the same WiFi network, 4share achieves its fastest speeds. Modern WiFi standards (WiFi 5, WiFi 6, WiFi 6E) support theoretical speeds of 1-3 Gbps. Real-world speeds are typically 200-800 Mbps, which is fast enough to transfer a 1 GB file in 10-40 seconds. This is faster than most cloud-based services even on fast internet connections.</p>
+
+      <h3>Different Networks: Direct Internet Transfer</h3>
+      <p>When devices are on different WiFi networks (different homes, different offices), 4share establishes a direct connection over the internet. The speed depends on the internet connection of both parties, but there is no server bottleneck in the middle. If both have 100 Mbps connections, you get roughly 100 Mbps transfer speed.</p>
+
+      <h3>Mobile to Desktop</h3>
+      <p>Transferring photos from your phone to your computer is one of the most common WiFi file transfer scenarios. With 4share, you select the photos on your phone, share the code, and enter it on your computer. The files transfer over WiFi directly.</p>
+
+      <h3>Desktop to Desktop</h3>
+      <p>In an office or home with multiple computers, 4share can transfer files between any two computers over the local WiFi network. This is useful for sharing project files, moving data between workstations, or collaborating on documents.</p>
+
+      <h3>Tablet to Phone</h3>
+      <p>When you need to move files between a tablet and a phone — perhaps photos from a tablet's camera to a phone for sharing — 4share provides a quick WiFi transfer path.</p>
+    </section>
+
+    <section>
+      <h2>4share vs Other WiFi Transfer Methods</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Method</th>
+            <th>Setup Required</th>
+            <th>Cross-Platform</th>
+            <th>Speed</th>
+            <th>Security</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>4share</td>
+            <td>None</td>
+            <td>Yes (all platforms)</td>
+            <td>Fast (P2P)</td>
+            <td>End-to-end encrypted</td>
+          </tr>
+          <tr>
+            <td>Shared Network Folder</td>
+            <td>Significant</td>
+            <td>Limited</td>
+            <td>Fast (LAN)</td>
+            <td>Basic</td>
+          </tr>
+          <tr>
+            <td>SMB/CIFS</td>
+            <td>Complex</td>
+            <td>Windows/Mac</td>
+            <td>Fast (LAN)</td>
+            <td>Basic</td>
+          </tr>
+          <tr>
+            <td>FTP Server</td>
+            <td>Complex</td>
+            <td>Yes</td>
+            <td>Moderate</td>
+            <td>Varies</td>
+          </tr>
+          <tr>
+            <td>WiFi Direct</td>
+            <td>App required</td>
+            <td>Limited</td>
+            <td>Fast</td>
+            <td>Moderate</td>
+          </tr>
+          <tr>
+            <td>AirDrop</td>
+            <td>Apple ID</td>
+            <td>Apple only</td>
+            <td>Fast</td>
+            <td>Good</td>
+          </tr>
+          <tr>
+            <td>Cloud Upload</td>
+            <td>Account</td>
+            <td>Yes</td>
+            <td>Server-dependent</td>
+            <td>Server-dependent</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Understanding WiFi Transfer Speeds</h2>
+      <p>WiFi transfer speed depends on several factors. The WiFi standard matters — WiFi 6 (802.11ax) is faster than WiFi 5 (802.11ac), which is faster than WiFi 4 (802.11n). Distance from the router matters too — the farther you are, the slower the connection. Interference from other devices and walls can also reduce speed.</p>
+      <p>In practice, most home WiFi networks provide 100-500 Mbps of real-world throughput. This means a 1 GB file transfers in 16-80 seconds, a 10 GB file in 3-13 minutes, and a 100 GB file in 30 minutes to 2 hours. These speeds are competitive with or faster than most cloud-based services, especially when both devices are on the same network.</p>
+      <p>4share does not add any overhead to the transfer. The speed you get is the speed of the WiFi connection between the two devices. There is no processing delay, no server queuing, and no throttling.</p>
+    </section>
+
+    <section>
+      <h2>Tips for Faster WiFi File Transfers</h2>
+      <p><strong>Use the same network.</strong> When both devices are on the same WiFi network, transfers are fastest because the data does not need to travel over the internet.</p>
+      <p><strong>Get closer to the router.</strong> WiFi speed decreases with distance. Being in the same room as the router usually provides the best speed.</p>
+      <p><strong>Use 5 GHz instead of 2.4 GHz.</strong> If your router supports both 2.4 GHz and 5 GHz bands, connect to the 5 GHz band for faster speeds and less interference.</p>
+      <p><strong>Minimize interference.</strong> Other devices using the same WiFi network compete for bandwidth. Close other devices' heavy downloads or streams during your transfer.</p>
+      <p><strong>Use a wired connection for the fastest speeds.</strong> If one or both devices can connect via Ethernet, the transfer will be even faster and more reliable than WiFi.</p>
+    </section>
+
+    <section>
+      <h2>Frequently Asked Questions</h2>
+
+      <h3>Do both devices need to be on the same WiFi network?</h3>
+      <p>No. 4share works over the internet as well. When both devices are on the same network, transfers are faster. But 4share can transfer files between devices on completely different networks.</p>
+
+      <h3>Is WiFi file transfer secure?</h3>
+      <p>Yes. 4share encrypts all transfers using DTLS, regardless of whether the devices are on the same WiFi network or different networks. Your files are protected during transfer.</p>
+
+      <h3>How fast is WiFi file transfer with 4share?</h3>
+      <p>Speed depends on your WiFi connection. On a modern WiFi 5 or WiFi 6 network, you can expect real-world speeds of 100-500 Mbps, which is fast enough for large file transfers.</p>
+
+      <h3>Can I transfer files without an internet connection?</h3>
+      <p>4share requires an internet connection to establish the initial connection between devices. However, if both devices are on the same local network, the actual file transfer happens locally without using internet bandwidth.</p>
+
+      <h3>Does WiFi transfer work with mesh networks?</h3>
+      <p>Yes. Mesh WiFi networks work the same way as traditional WiFi networks. As long as both devices are connected to the same mesh network, 4share will transfer files between them at WiFi speeds.</p>
+
+      <h3>Can I use 4share at a coffee shop or public WiFi?</h3>
+      <p>Yes. 4share works on any WiFi network. The DTLS encryption protects your files even on public WiFi networks. However, public WiFi may be slower than your home network.</p>
+
+      <h3>What about WiFi 6E and WiFi 7?</h3>
+      <p>4share benefits from faster WiFi standards automatically. As your network upgrades to WiFi 6E or WiFi 7, your 4share transfers will get faster without any changes to the service.</p>
+
+      <h3>Can I transfer between a device on WiFi and one on cellular?</h3>
+      <p>Yes. 4share works across different connection types. A device on WiFi can transfer files to a device on cellular data, and vice versa.</p>
+    </section>
+
+    <section class="cta-section">
+      <h2>Transfer Files Over WiFi Now</h2>
+      <p>Fast, direct, and encrypted. Use your WiFi connection for what it was meant for — connecting devices.</p>
+      <a href="https://www.4share.work" class="cta-button">Start WiFi Transfer</a>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <p>&copy; 2026 4share &mdash; P2P File Transfer</p>
+      <nav>
+        <a href="/blog/">Blog</a>
+        <a href="/about/">About</a>
+        <a href="/privacy/">Privacy</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
