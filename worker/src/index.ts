@@ -1,4 +1,4 @@
-// Cloudflare Worker: ShareIt Signaling Server
+// Cloudflare Worker: 4share Signaling Server
 // Uses Durable Objects to manage WebSocket rooms for WebRTC signaling
 
 export interface Env {
@@ -20,7 +20,7 @@ export default {
     }
 
     if (url.pathname === '/') {
-      return new Response('ShareIt Signaling Server', { headers: corsHeaders });
+      return new Response('4share Signaling Server', { headers: corsHeaders });
     }
 
     if (url.pathname === '/ws') {

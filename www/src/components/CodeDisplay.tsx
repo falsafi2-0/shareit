@@ -37,8 +37,8 @@ export function CodeDisplay({ code, expiresIn = 600 }: CodeDisplayProps) {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'ShareIt Code',
-          text: `Use code ${code} to receive my files on ShareIt`,
+          title: '4share Code',
+          text: `Use code ${code} to receive my files on 4share`,
           url: shareUrl,
         });
       } catch {
