@@ -1,5 +1,5 @@
 // Cloudflare Worker: ShareIt Signaling Server
-// Uses Durable Objects to manage WebSocket rooms for WebRTC signaling
+// Uses Durable Objects with WebSocket Hibernation for WebRTC signaling
 
 export interface Env {
   ROOM: DurableObjectNamespace;
@@ -19,28 +19,23 @@ export default {
       return new Response(null, { headers: corsHeaders });
     }
 
-    // Health check
     if (url.pathname === '/') {
       return new Response('ShareIt Signaling Server', { headers: corsHeaders });
     }
 
-    // WebSocket upgrade for signaling
     if (url.pathname === '/ws') {
       const code = url.searchParams.get('code');
       if (!code || !/^\d{6}$/.test(code)) {
         return new Response('Invalid code', { status: 400, headers: corsHeaders });
       }
 
-      // Check for WebSocket upgrade
       const upgradeHeader = request.headers.get('Upgrade');
       if (!upgradeHeader || upgradeHeader !== 'websocket') {
         return new Response('Expected WebSocket', { status: 426, headers: corsHeaders });
       }
 
-      // Get Durable Object for this room
       const id = env.ROOM.idFromName(code);
       const stub = env.ROOM.get(id);
-
       return stub.fetch(request);
     }
 
@@ -48,97 +43,62 @@ export default {
   },
 };
 
-// Durable Object: Room
-// Manages WebSocket connections for a single transfer code
+// Durable Object with WebSocket Hibernation API
 export class Room {
   private state: DurableObjectState;
-  private connections: Map<WebSocket, string> = new Map(); // ws -> role (sender/receiver)
+  private connections: Map<WebSocket, string> = new Map();
 
-  constructor(state: DurableObjectState) {
+  constructor(state: DurableObjectState, env: Env) {
     this.state = state;
-    this.state.blockConcurrencyWhile(async () => {
-      // Restore state if needed
-    });
   }
 
   async fetch(request: Request): Promise<Response> {
-    // Create WebSocket pair
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
 
-    server.accept();
+    this.state.acceptWebSocket(server);
 
-    server.addEventListener('message', (event) => {
-      this.handleMessage(server, event.data as string);
-    });
-
-    server.addEventListener('close', () => {
-      this.connections.delete(server);
-      // Notify remaining connection
-      for (const [ws] of this.connections) {
-        ws.send(JSON.stringify({ type: 'peer-disconnected' }));
-      }
-    });
-
-    server.addEventListener('error', () => {
-      this.connections.delete(server);
-    });
-
-    // Wait for first message (join)
-    const joinPromise = new Promise<void>((resolve) => {
-      const handler = (event: MessageEvent) => {
-        try {
-          const msg = JSON.parse(event.data as string);
-          if (msg.type === 'join') {
-            this.connections.set(server, msg.role);
-            server.removeEventListener('message', handler);
-            resolve();
-          }
-        } catch {
-          // ignore
-        }
-      };
-      server.addEventListener('message', handler);
-    });
-
-    // Race: join within 5s or timeout
-    await Promise.race([
-      joinPromise,
-      new Promise<void>((resolve) => setTimeout(() => {
-        server.close(4000, 'Timeout waiting for join');
-        resolve();
-      }, 5000)),
-    ]);
-
-    return new Response(null, {
-      status: 101,
-      webSocket: client,
-    });
+    return new Response(null, { status: 101, webSocket: client });
   }
 
-  private handleMessage(sender: WebSocket, data: string) {
+  async webSocketMessage(ws: WebSocket, data: string | ArrayBuffer): Promise<void> {
     let msg: any;
     try {
-      msg = JSON.parse(data);
+      msg = JSON.parse(data as string);
     } catch {
       return;
     }
 
-    const senderRole = this.connections.get(sender);
-    if (!senderRole) return;
+    if (msg.type === 'join') {
+      this.connections.set(ws, msg.role);
 
-    // Find the other connection
-    for (const [ws, role] of this.connections) {
-      if (ws !== sender) {
-        // Forward the message to the peer
-        ws.send(data);
+      if (this.connections.size >= 2) {
+        for (const [sock, role] of this.connections) {
+          if (role === 'sender') {
+            sock.send(JSON.stringify({ type: 'ready', code: msg.code }));
+          }
+        }
+      }
+      return;
+    }
+
+    // Forward all other messages to the other peer
+    for (const [sock] of this.connections) {
+      if (sock !== ws) {
+        sock.send(data as string);
         break;
       }
     }
+  }
 
-    // Special handling: if sender is ready and we have both peers, notify sender
-    if (senderRole === 'sender' && this.connections.size >= 2) {
-      sender.send(JSON.stringify({ type: 'ready', code: msg.code }));
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    this.connections.delete(ws);
+    for (const [sock] of this.connections) {
+      sock.send(JSON.stringify({ type: 'peer-disconnected' }));
     }
+  }
+
+  async webSocketError(ws: WebSocket): Promise<void> {
+    this.connections.delete(ws);
   }
 }

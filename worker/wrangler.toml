@@ -1,6 +1,7 @@
 name = "shareit-signaling"
 main = "src/index.ts"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-12-01"
+compatibility_flags = ["nodejs_compat"]
 
 [durable_objects]
 bindings = [
@@ -9,4 +10,4 @@ bindings = [
 
 [[migrations]]
 tag = "v1"
-new_classes = ["Room"]
+new_sqlite_classes = ["Room"]
