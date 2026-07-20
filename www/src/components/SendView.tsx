@@ -12,7 +12,7 @@ import {
 } from '../lib/webrtc';
 import { SignalingClient, type SignalMessage } from '../lib/signaling';
 
-const CHUNK_SIZE = 16384; // 16KB chunks for reliability
+const CHUNK_SIZE = 16384;
 
 type SendStep = 'select' | 'code' | 'transferring' | 'done' | 'error';
 
@@ -29,8 +29,8 @@ export function SendView({ onBack }: { onBack: () => void }) {
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const dcRef = useRef<RTCDataChannel | null>(null);
   const signalingRef = useRef<SignalingClient | null>(null);
+  const filesRef = useRef<File[]>([]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       dcRef.current?.close();
@@ -39,88 +39,7 @@ export function SendView({ onBack }: { onBack: () => void }) {
     };
   }, []);
 
-  const handleSend = useCallback(async () => {
-    if (files.length === 0) return;
-
-    const generatedCode = generateCode();
-    setCode(generatedCode);
-    setStep('code');
-
-    const signaling = new SignalingClient();
-    signalingRef.current = signaling;
-
-    try {
-      await signaling.connect(generatedCode);
-    } catch {
-      setError('Failed to connect to signaling server');
-      setStep('error');
-      return;
-    }
-
-    signaling.onMessage(async (msg: SignalMessage) => {
-      if ('code' in msg && msg.code !== generatedCode) return;
-
-      switch (msg.type) {
-        case 'ready': {
-          // Receiver is ready, create peer connection and offer
-          const { pc } = createPeerConnection(
-            (candidate) => {
-              signaling.send({
-                type: 'ice-candidate',
-                code: generatedCode,
-                candidate,
-              });
-            },
-            () => startTransfer(dcRef.current!, files),
-            () => {},
-            () => {},
-          );
-
-          pcRef.current = pc;
-          const dataChannel = createDataChannel(pc);
-          dcRef.current = dataChannel;
-
-          // Wait for ICE gathering
-          await new Promise<void>((resolve) => {
-            if (pc.iceGatheringState === 'complete') {
-              resolve();
-            } else {
-              pc.onicegatheringstatechange = () => {
-                if (pc.iceGatheringState === 'complete') resolve();
-              };
-            }
-            // Timeout after 5s
-            setTimeout(resolve, 5000);
-          });
-
-          signaling.send({
-            type: 'offer',
-            code: generatedCode,
-            sdp: pc.localDescription!,
-          });
-          break;
-        }
-        case 'answer': {
-          const pc = pcRef.current;
-          if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
-          }
-          break;
-        }
-        case 'ice-candidate': {
-          const pc = pcRef.current;
-          if (pc) {
-            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
-          }
-          break;
-        }
-      }
-    });
-
-    signaling.send({ type: 'join', code: generatedCode, role: 'sender' });
-  }, [files]);
-
-  const startTransfer = async (dc: RTCDataChannel, transferFiles: File[]) => {
+  const startTransfer = useCallback(async (dc: RTCDataChannel, transferFiles: File[]) => {
     setStep('transferring');
     setTransferState({ status: 'transferring', percent: 0, connectionType: 'p2p' });
 
@@ -129,12 +48,11 @@ export function SendView({ onBack }: { onBack: () => void }) {
       0,
     );
     let sentChunks = 0;
-    let startTime = Date.now();
+    const startTime = Date.now();
 
     for (const file of transferFiles) {
       const numChunks = Math.ceil(file.size / CHUNK_SIZE);
       for (let i = 0; i < numChunks; i++) {
-        // Wait for buffer to drain
         while (dc.bufferedAmount > dc.bufferedAmountLowThreshold) {
           await new Promise((resolve) => setTimeout(resolve, 50));
         }
@@ -161,7 +79,95 @@ export function SendView({ onBack }: { onBack: () => void }) {
     sendTransferComplete(dc);
     setTransferState({ status: 'complete', percent: 100 });
     setStep('done');
-  };
+  }, []);
+
+  const handleSend = useCallback(async () => {
+    if (files.length === 0) return;
+
+    filesRef.current = files;
+    const generatedCode = generateCode();
+    setCode(generatedCode);
+    setStep('code');
+
+    const signaling = new SignalingClient();
+    signalingRef.current = signaling;
+
+    try {
+      await signaling.connect(generatedCode);
+    } catch {
+      setError('Failed to connect to signaling server');
+      setStep('error');
+      return;
+    }
+
+    signaling.onMessage(async (msg: SignalMessage) => {
+      if ('code' in msg && msg.code !== generatedCode) return;
+
+      switch (msg.type) {
+        case 'ready': {
+          // Create peer connection
+          const pc = createPeerConnection((candidate) => {
+            signaling.send({
+              type: 'ice-candidate',
+              code: generatedCode,
+              candidate,
+            });
+          });
+          pcRef.current = pc;
+
+          // Create data channel
+          const dc = createDataChannel(pc);
+          dcRef.current = dc;
+
+          // When data channel opens, start sending files
+          dc.onopen = () => {
+            console.log('Sender data channel open, starting transfer');
+            startTransfer(dc, filesRef.current);
+          };
+
+          // Create offer
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          // Wait for ICE gathering
+          await new Promise<void>((resolve) => {
+            const check = () => {
+              if (pc.iceGatheringState === 'complete') {
+                resolve();
+              }
+            };
+            pc.onicegatheringstatechange = check;
+            check();
+            setTimeout(resolve, 5000);
+          });
+
+          // Send offer with ICE candidates
+          signaling.send({
+            type: 'offer',
+            code: generatedCode,
+            sdp: pc.localDescription!,
+          });
+          break;
+        }
+        case 'answer': {
+          const pc = pcRef.current;
+          if (pc && msg.sdp) {
+            await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+          }
+          break;
+        }
+        case 'ice-candidate': {
+          const pc = pcRef.current;
+          if (pc && msg.candidate) {
+            await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+          }
+          break;
+        }
+      }
+    });
+
+    signaling.send({ type: 'join', code: generatedCode, role: 'sender' });
+  }, [files, startTransfer]);
 
   if (step === 'error') {
     return (

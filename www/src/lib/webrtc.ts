@@ -17,13 +17,8 @@ const ICE_SERVERS: RTCConfiguration = {
 
 export function createPeerConnection(
   onIceCandidate: (candidate: RTCIceCandidateInit) => void,
-  onDataChannelOpen: () => void,
-  onFileChunk: (chunk: FileChunk) => void,
-  onTransferComplete: () => void,
-  onProgress?: (percent: number) => void,
-): { pc: RTCPeerConnection; dc: RTCDataChannel | null } {
+): RTCPeerConnection {
   const pc = new RTCPeerConnection(ICE_SERVERS);
-  let dc: RTCDataChannel | null = null;
 
   pc.onicecandidate = (event) => {
     if (event.candidate) {
@@ -35,62 +30,44 @@ export function createPeerConnection(
     console.log('ICE state:', pc.iceConnectionState);
   };
 
-  // For sender: create data channel
-  pc.onnegotiationneeded = async () => {
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-  };
-
-  // For receiver: handle incoming data channel
-  pc.ondatachannel = (event) => {
-    dc = event.channel;
-    setupDataChannel(dc, onFileChunk, onTransferComplete, onDataChannelOpen, onProgress);
-  };
-
-  return { pc, dc };
+  return pc;
 }
 
-export function createDataChannel(
-  pc: RTCPeerConnection,
-  label: string = 'file-transfer',
-): RTCDataChannel {
-  const dc = pc.createDataChannel(label, {
-    ordered: true,
-  });
-  setupDataChannel(dc, () => {}, () => {}, () => {});
-  return dc;
-}
-
-function setupDataChannel(
+export function setupDataChannel(
   dc: RTCDataChannel,
-  onFileChunk: (chunk: FileChunk) => void,
-  onTransferComplete: () => void,
-  onDataChannelOpen: () => void,
-  onProgress?: (percent: number) => void,
+  handlers: {
+    onFileChunk: (chunk: FileChunk) => void;
+    onTransferComplete: () => void;
+    onOpen: () => void;
+    onProgress?: (percent: number) => void;
+  },
 ) {
   dc.binaryType = 'arraybuffer';
 
   dc.onopen = () => {
     console.log('Data channel open');
-    onDataChannelOpen();
+    handlers.onOpen();
   };
 
   dc.onmessage = (event) => {
-    // First message is metadata (JSON)
     if (typeof event.data === 'string') {
-      const msg = JSON.parse(event.data);
-      if (msg.type === 'transfer-complete') {
-        onTransferComplete();
+      try {
+        const msg = JSON.parse(event.data);
+        if (msg.type === 'transfer-complete') {
+          handlers.onTransferComplete();
+        }
+      } catch {
+        // ignore
       }
     } else {
-      // Binary data - file chunk header is the first 1024 bytes as JSON
+      // Binary: [4 bytes header length][header JSON][file data]
       const view = new DataView(event.data);
       const headerLen = view.getUint32(0, true);
       const headerBytes = new Uint8Array(event.data, 4, headerLen);
       const header = JSON.parse(new TextDecoder().decode(headerBytes));
       const fileData = event.data.slice(4 + headerLen);
 
-      onFileChunk({
+      handlers.onFileChunk({
         index: header.index,
         total: header.total,
         name: header.name,
@@ -98,8 +75,8 @@ function setupDataChannel(
         data: fileData,
       });
 
-      if (onProgress && header.total > 0) {
-        onProgress(((header.index + 1) / header.total) * 100);
+      if (handlers.onProgress && header.total > 0) {
+        handlers.onProgress(((header.index + 1) / header.total) * 100);
       }
     }
   };
@@ -109,19 +86,8 @@ function setupDataChannel(
   };
 }
 
-// Send file metadata (name, size, chunk count) before file data
-export function sendFileMetadata(
-  dc: RTCDataChannel,
-  file: File,
-  totalChunks: number,
-) {
-  const meta = {
-    type: 'file-metadata',
-    name: file.name,
-    size: file.size,
-    totalChunks,
-  };
-  dc.send(JSON.stringify(meta));
+export function createDataChannel(pc: RTCPeerConnection): RTCDataChannel {
+  return pc.createDataChannel('file-transfer', { ordered: true });
 }
 
 // Send a single chunk of a file
@@ -131,7 +97,7 @@ export function sendFileChunk(
   chunkIndex: number,
   totalChunks: number,
   chunkSize: number,
-) {
+): Promise<void> {
   const start = chunkIndex * chunkSize;
   const end = Math.min(start + chunkSize, file.size);
   const chunk = file.slice(start, end);
@@ -146,13 +112,17 @@ export function sendFileChunk(
         size: file.size,
       };
       const headerStr = new TextEncoder().encode(JSON.stringify(header));
-      const headerBuf = new Uint32Array([headerStr.length]);
+      const headerLenBuf = new Uint32Array([headerStr.length]);
 
-      // Combine header length + header + data
-      const combined = new Uint8Array(4 + headerStr.byteLength + (reader.result as ArrayBuffer).byteLength);
-      combined.set(new Uint8Array(headerBuf.buffer), 0);
+      const combined = new Uint8Array(
+        4 + headerStr.byteLength + (reader.result as ArrayBuffer).byteLength,
+      );
+      combined.set(new Uint8Array(headerLenBuf.buffer), 0);
       combined.set(headerStr, 4);
-      combined.set(new Uint8Array(reader.result as ArrayBuffer), 4 + headerStr.byteLength);
+      combined.set(
+        new Uint8Array(reader.result as ArrayBuffer),
+        4 + headerStr.byteLength,
+      );
 
       dc.send(combined.buffer);
       resolve();

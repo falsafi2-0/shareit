@@ -1,9 +1,10 @@
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { CodeInput } from './CodeInput';
 import { TransferProgress, type TransferState } from './TransferProgress';
 import {
   createPeerConnection,
+  setupDataChannel,
   type FileChunk,
 } from '../lib/webrtc';
 import { FileAssembler } from '../lib/assembler';
@@ -24,12 +25,30 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
   const assemblerRef = useRef(new FileAssembler());
   const receivedFilesRef = useRef<string[]>([]);
 
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      pcRef.current?.close();
-      signalingRef.current?.disconnect();
-    };
+  const handleChunk = useCallback((chunk: FileChunk) => {
+    const assembler = assemblerRef.current;
+    assembler.addChunk(chunk.name, chunk.size, chunk.index, chunk.total, chunk.data);
+
+    if (!receivedFilesRef.current.includes(chunk.name)) {
+      receivedFilesRef.current.push(chunk.name);
+    }
+  }, []);
+
+  const handleTransferComplete = useCallback(() => {
+    for (const fileName of receivedFilesRef.current) {
+      assemblerRef.current.assembleAndDownload(fileName);
+    }
+    setTransferState({ status: 'complete', percent: 100 });
+    setStep('done');
+  }, []);
+
+  const handleProgress = useCallback((percent: number) => {
+    setStep('transferring');
+    setTransferState({
+      status: 'transferring',
+      percent,
+      connectionType: 'p2p',
+    });
   }, []);
 
   const handleCodeSubmit = useCallback(async (enteredCode: string) => {
@@ -51,71 +70,47 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
 
       switch (msg.type) {
         case 'offer': {
-          const { pc } = createPeerConnection(
-            (candidate) => {
-              signaling.send({
-                type: 'ice-candidate',
-                code: enteredCode,
-                candidate,
-              });
-            },
-            () => {},
-            (chunk) => handleChunk(chunk),
-            () => handleTransferComplete(),
-            (percent) => handleProgress(percent),
-          );
-
+          // Create peer connection
+          const pc = createPeerConnection((candidate) => {
+            signaling.send({
+              type: 'ice-candidate',
+              code: enteredCode,
+              candidate,
+            });
+          });
           pcRef.current = pc;
 
-          // Handle data channel from sender
+          // Handle incoming data channel from sender
           pc.ondatachannel = (event) => {
             const dc = event.channel;
-            dc.binaryType = 'arraybuffer';
-
-            dc.onmessage = (event) => {
-              if (typeof event.data === 'string') {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'transfer-complete') {
-                  handleTransferComplete();
-                }
-              } else {
-                const view = new DataView(event.data);
-                const headerLen = view.getUint32(0, true);
-                const headerBytes = new Uint8Array(event.data, 4, headerLen);
-                const header = JSON.parse(new TextDecoder().decode(headerBytes));
-                const fileData = event.data.slice(4 + headerLen);
-
-                handleChunk({
-                  index: header.index,
-                  total: header.total,
-                  name: header.name,
-                  size: header.size,
-                  data: fileData,
-                });
-
-                if (header.total > 0) {
-                  handleProgress(((header.index + 1) / header.total) * 100);
-                }
-              }
-            };
+            setupDataChannel(dc, {
+              onFileChunk: handleChunk,
+              onTransferComplete: handleTransferComplete,
+              onOpen: () => console.log('Receiver data channel open'),
+              onProgress: handleProgress,
+            });
           };
 
+          // Set remote description (the offer)
           await pc.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+
+          // Create answer
           const answer = await pc.createAnswer();
           await pc.setLocalDescription(answer);
 
           // Wait for ICE gathering
           await new Promise<void>((resolve) => {
-            if (pc.iceGatheringState === 'complete') {
-              resolve();
-            } else {
-              pc.onicegatheringstatechange = () => {
-                if (pc.iceGatheringState === 'complete') resolve();
-              };
-            }
+            const check = () => {
+              if (pc.iceGatheringState === 'complete') {
+                resolve();
+              }
+            };
+            pc.onicegatheringstatechange = check;
+            check();
             setTimeout(resolve, 5000);
           });
 
+          // Send answer with ICE candidates
           signaling.send({
             type: 'answer',
             code: enteredCode,
@@ -125,7 +120,7 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
         }
         case 'ice-candidate': {
           const pc = pcRef.current;
-          if (pc) {
+          if (pc && msg.candidate) {
             await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
           }
           break;
@@ -134,36 +129,7 @@ export function ReceiveView({ onBack }: { onBack: () => void }) {
     });
 
     signaling.send({ type: 'join', code: enteredCode, role: 'receiver' });
-  }, []);
-
-  const handleChunk = (chunk: FileChunk) => {
-    const assembler = assemblerRef.current;
-    assembler.addChunk(chunk.name, chunk.size, chunk.index, chunk.total, chunk.data);
-
-    if (!receivedFilesRef.current.includes(chunk.name)) {
-      receivedFilesRef.current.push(chunk.name);
-    }
-  };
-
-  const handleProgress = (percent: number) => {
-    setStep('transferring');
-    setTransferState({
-      status: 'transferring',
-      percent,
-      connectionType: 'p2p',
-      totalFiles: receivedFilesRef.current.length || 1,
-    });
-  };
-
-  const handleTransferComplete = () => {
-    // Download all received files
-    for (const fileName of receivedFilesRef.current) {
-      assemblerRef.current.assembleAndDownload(fileName);
-    }
-
-    setTransferState({ status: 'complete', percent: 100 });
-    setStep('done');
-  };
+  }, [handleChunk, handleTransferComplete, handleProgress]);
 
   if (step === 'error') {
     return (
